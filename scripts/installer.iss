@@ -26,8 +26,7 @@ SolidCompression=yes
 WizardStyle=modern
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
-AppMutex=Local\WhisperLMSingleInstanceMutex
-CloseApplications=force
+CloseApplications=yes
 RestartApplications=no
 
 [Languages]
@@ -53,3 +52,29 @@ Type: filesandordirs; Name: "{app}\logs"
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
+
+[Code]
+procedure CloseRunningWhisperLM();
+var
+  ResultCode: Integer;
+  PsCmd: String;
+begin
+  PsCmd := '-NoProfile -NonInteractive -WindowStyle Hidden -Command "' +
+    'Get-Process -Name WhisperLM,whisper-server,llama-server -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue; ' +
+    'Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | ' +
+    'Where-Object { $_.Name -match ''^(pythonw|python)\.exe$'' -and $_.CommandLine -match ''whisper_lm|whisper_flow'' } | ' +
+    'ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"';
+  Exec('powershell.exe', PsCmd, '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+end;
+
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+begin
+  CloseRunningWhisperLM();
+  Result := '';
+end;
+
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+begin
+  if CurUninstallStep = usUninstall then
+    CloseRunningWhisperLM();
+end;
