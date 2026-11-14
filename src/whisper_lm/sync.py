@@ -156,6 +156,9 @@ def merge_snapshots(local_snap: Mapping[str, Any], remote_snap: Mapping[str, Any
     del_meet = set(str(x) for x in local_snap.get("deleted_meeting_ids") or ())
     del_meet.update(str(x) for x in remote_snap.get("deleted_meeting_ids") or ())
 
+    del_terms = set(str(x).strip() for x in local_snap.get("deleted_dictionary_terms") or () if str(x).strip())
+    del_terms.update(str(x).strip() for x in remote_snap.get("deleted_dictionary_terms") or () if str(x).strip())
+
     merged_dict: dict[str, dict[str, Any]] = {}
     for src in (remote_snap.get("dictations") or {}, local_snap.get("dictations") or {}):
         if not isinstance(src, Mapping):
@@ -194,7 +197,7 @@ def merge_snapshots(local_snap: Mapping[str, Any], remote_snap: Mapping[str, Any
     for lst in (local_snap.get("custom_dictionary") or [], remote_snap.get("custom_dictionary") or []):
         for term in lst:
             t = str(term).strip()
-            if t and t not in seen_terms:
+            if t and t not in del_terms and t not in seen_terms:
                 seen_terms.add(t)
                 merged_terms.append(t)
 
@@ -206,6 +209,7 @@ def merge_snapshots(local_snap: Mapping[str, Any], remote_snap: Mapping[str, Any
         "meetings": merged_meetings,
         "deleted_meeting_ids": sorted(del_meet),
         "custom_dictionary": merged_terms,
+        "deleted_dictionary_terms": sorted(del_terms),
     }
 
 
@@ -216,8 +220,9 @@ def _snapshot_content_equal(a: Mapping[str, Any], b: Mapping[str, Any]) -> bool:
         "meetings",
         "deleted_meeting_ids",
         "custom_dictionary",
+        "deleted_dictionary_terms",
     )
-    return all(a.get(k) == b.get(k) for k in keys)
+    return all((a.get(k) or []) == (b.get(k) or []) if k != "dictations" and k != "meetings" else a.get(k) == b.get(k) for k in keys)
 
 
 class _FolderBackend:
@@ -396,43 +401,62 @@ class CloudSyncManager:
     def update_config(self, config: AppConfig) -> None:
         self.config = config
 
-    def _load_tombstones(self) -> tuple[list[str], list[str]]:
+    def _load_tombstones(self) -> tuple[list[str], list[str], list[str]]:
         if not self._tombstone_path.exists():
-            return [], []
+            return [], [], []
         try:
             raw = json.loads(self._tombstone_path.read_text(encoding="utf-8"))
             d = [str(x) for x in raw.get("dictations") or []]
             m = [str(x) for x in raw.get("meetings") or []]
-            return d, m
+            t = [str(x) for x in raw.get("dictionary_terms") or []]
+            return d, m, t
         except Exception:
-            return [], []
+            return [], [], []
 
-    def _save_tombstones(self, del_dict: list[str], del_meet: list[str]) -> None:
+    def _save_tombstones(
+        self,
+        del_dict: list[str],
+        del_meet: list[str],
+        del_terms: list[str] | None = None,
+    ) -> None:
         self.data_root.mkdir(parents=True, exist_ok=True)
         payload = {
             "dictations": sorted(set(del_dict)),
             "meetings": sorted(set(del_meet)),
+            "dictionary_terms": sorted(set(del_terms or [])),
         }
         self._tombstone_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
     def record_deleted_dictation(self, entry_id: str) -> None:
         if not entry_id:
             return
-        d, m = self._load_tombstones()
+        d, m, t = self._load_tombstones()
         if entry_id not in d:
             d.append(entry_id)
-            self._save_tombstones(d, m)
+            self._save_tombstones(d, m, t)
 
     def record_deleted_meeting(self, meeting_id: str) -> None:
         if not meeting_id:
             return
-        d, m = self._load_tombstones()
+        d, m, t = self._load_tombstones()
         if meeting_id not in m:
             m.append(meeting_id)
-            self._save_tombstones(d, m)
+            self._save_tombstones(d, m, t)
+
+    def record_dictionary_diff(self, old_terms: list[str], new_terms: list[str]) -> None:
+        """Track deleted or re-added dictionary terms so removals stay removed across sync."""
+        old_set = {x.strip() for x in old_terms if x.strip()}
+        new_set = {x.strip() for x in new_terms if x.strip()}
+        if old_set == new_set:
+            return
+        d, m, del_terms = self._load_tombstones()
+        tomb_set = set(del_terms)
+        tomb_set.update(old_set - new_set)
+        tomb_set.difference_update(new_set)
+        self._save_tombstones(d, m, sorted(tomb_set))
 
     def _build_local_snapshot(self) -> dict[str, Any]:
-        del_dict, del_meet = self._load_tombstones()
+        del_dict, del_meet, del_terms = self._load_tombstones()
         dict_map = {item.id: asdict(item) for item in self.history_store.list_all()}
         meet_map = {rec.id: asdict(rec) for rec in self.meeting_store.list_all()}
         return {
@@ -443,6 +467,7 @@ class CloudSyncManager:
             "meetings": meet_map,
             "deleted_meeting_ids": sorted(set(del_meet)),
             "custom_dictionary": list(self.config.custom_dictionary),
+            "deleted_dictionary_terms": sorted(set(del_terms)),
         }
 
     def _apply_merged_local(self, local_snap: Mapping[str, Any], merged: Mapping[str, Any]) -> int:
@@ -450,6 +475,7 @@ class CloudSyncManager:
         self._save_tombstones(
             list(merged.get("deleted_dictation_ids") or []),
             list(merged.get("deleted_meeting_ids") or []),
+            list(merged.get("deleted_dictionary_terms") or []),
         )
 
         valid_hist = set(HistoryEntry.__dataclass_fields__)

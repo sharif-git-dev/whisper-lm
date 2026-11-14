@@ -66,16 +66,7 @@ def migrate_legacy_data(project_root: Path, data_root: Path) -> bool:
     return migrated
 
 
-DEFAULT_CUSTOM_DICTIONARY: list[str] = [
-    "السلام عليكم",
-    "وعليكم السلام",
-    "إن شاء الله",
-    "ما شاء الله",
-    "الحمد لله",
-    "جزاك الله خيرا",
-    "سبحان الله",
-    "بسم الله",
-]
+DEFAULT_CUSTOM_DICTIONARY: list[str] = []
 
 
 @dataclass
@@ -177,16 +168,14 @@ class AppConfig:
             return "Accurate English dictation with proper capitalization and punctuation."
 
         if self.arabic_output_mode == "arabic_script":
-            sample = ", ".join(terms[:8]) if terms else "السلام عليكم، إن شاء الله، الحمد لله"
-            return (
+            base = (
                 "This is mainly English dictation with occasional formal Modern Standard Arabic "
-                f"words written in Arabic script, such as: {sample}."
+                "words written in Arabic script."
             )
-        sample = ", ".join(terms[:8]) if terms else "Assalamu Alaikum, Inshallah, Alhamdulillah"
-        return (
-            "This is English dictation with occasional formal Arabic terms written in Latin "
-            f"letters, such as: {sample}."
-        )
+            return f"{base} Preferred terms: {', '.join(terms[:8])}." if terms else base
+
+        base = "This is English dictation with occasional formal Arabic terms written in Latin letters."
+        return f"{base} Preferred terms: {', '.join(terms[:8])}." if terms else base
 
     @classmethod
     def load(cls, path: Path | None = None) -> "AppConfig":

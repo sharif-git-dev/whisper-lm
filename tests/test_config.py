@@ -91,6 +91,9 @@ def test_migrate_legacy_data_preserves_existing_and_is_idempotent(tmp_path: Path
     assert (data / "history" / "dictations.jsonl").exists()
     assert (data / "meetings" / "m1.json").exists()
 
+    # Empty dictionary keeps feature enabled without pre-seeded phrases
+    assert AppConfig().custom_dictionary == []
+
     # Does not overwrite user edits already saved in persistent data_root
     (data / "config.json").write_text('{"hotkey_hold": "ctrl+win"}', encoding="utf-8")
     assert migrate_legacy_data(proj, data) is False

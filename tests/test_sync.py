@@ -203,3 +203,27 @@ def test_firebase_and_github_gist_backends_with_mock_http(monkeypatch) -> None:
     gh.write({"dictations": {"x": {"id": "x"}}})
     assert gist_ids == ["gist_42"]
     assert gh.read() == {"dictations": {"x": {"id": "x"}}}
+
+
+def test_dictionary_term_deletion_stays_deleted_across_sync(tmp_path: Path) -> None:
+    shared_cloud = tmp_path / "Drive"
+    shared_cloud.mkdir()
+    data_dir = tmp_path / "appdata"
+    cfg = AppConfig(
+        cloud_backup_mode="folder",
+        cloud_backup_folder=str(shared_cloud),
+        custom_dictionary=["KeepTerm", "RemoveMe"],
+    )
+    sync_mgr = CloudSyncManager(cfg, DictationStore(data_dir / "history"), MeetingStore(data_dir / "meetings"), data_root=data_dir)
+    assert sync_mgr.sync_now(drives=[]).ok is True
+
+    # Removing a word records a tombstone so syncing won't resurrect it from backup
+    sync_mgr.record_dictionary_diff(["KeepTerm", "RemoveMe"], ["KeepTerm"])
+    cfg.custom_dictionary = ["KeepTerm"]
+    sync_mgr.update_config(cfg)
+    assert sync_mgr.sync_now(drives=[]).ok is True
+    assert cfg.custom_dictionary == ["KeepTerm"]
+
+    saved_backup = json.loads((shared_cloud / "WhisperLM" / "whisperlm_backup.json").read_text(encoding="utf-8"))
+    assert saved_backup["custom_dictionary"] == ["KeepTerm"]
+    assert "RemoveMe" in saved_backup["deleted_dictionary_terms"]

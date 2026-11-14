@@ -410,6 +410,7 @@ class WhisperLMApp:
             self.tray.status_requested.emit("Ready", "#F5F5F7")
 
     def _apply_new_config(self, new_cfg: AppConfig) -> None:
+        self.cloud_sync.record_dictionary_diff(self.config.custom_dictionary, new_cfg.custom_dictionary)
         new_cfg.save(self.data_root / "config.json")
         self.config = new_cfg
         self.cloud_sync.update_config(new_cfg)
