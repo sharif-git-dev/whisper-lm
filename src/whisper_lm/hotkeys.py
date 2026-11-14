@@ -104,6 +104,8 @@ user32.DispatchMessageW.argtypes = [ctypes.POINTER(wintypes.MSG)]
 user32.DispatchMessageW.restype = LRESULT
 user32.PostThreadMessageW.argtypes = [wintypes.DWORD, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
 user32.PostThreadMessageW.restype = wintypes.BOOL
+user32.GetAsyncKeyState.argtypes = [ctypes.c_int]
+user32.GetAsyncKeyState.restype = ctypes.c_short
 user32.SendInput.argtypes = [wintypes.UINT, ctypes.POINTER(_INPUT), ctypes.c_int]
 user32.SendInput.restype = wintypes.UINT
 kernel32.GetCurrentThreadId.restype = wintypes.DWORD
@@ -328,6 +330,11 @@ class GlobalHotkeyListener:
                     is_up = w_param in (WM_KEYUP, WM_SYSKEYUP)
 
                     if is_down:
+                        # Drop any stale modifiers whose KEYUP was swallowed by UAC/elevated windows.
+                        for mvk in list(self._pressed_vks & MODIFIER_VKS):
+                            if mvk != vk and (user32.GetAsyncKeyState(mvk) & 0x8000) == 0:
+                                self._pressed_vks.discard(mvk)
+                                self._suppressed_vks.discard(mvk)
                         was_down = vk in self._pressed_vks
                         self._pressed_vks.add(vk)
 

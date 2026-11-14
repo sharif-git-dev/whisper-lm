@@ -8,7 +8,7 @@ Set-Location $Root
 
 $Python = Join-Path $Root ".venv\Scripts\python.exe"
 $ReleaseDir = Join-Path $Root "release"
-$BuildIcon = Join-Path $Root "build\whisper_flow.ico"
+$BuildIcon = Join-Path $Root "build\whisper_lm.ico"
 
 Write-Host "Ensuring PyInstaller is installed..."
 & $Python -m pip show pyinstaller *> $null
@@ -20,30 +20,51 @@ $ErrorActionPreference = "Stop"
 
 New-Item -ItemType Directory -Force -Path (Join-Path $Root "build"), $ReleaseDir | Out-Null
 
-Write-Host "Generating monochrome Whisper Flow icon..."
+Write-Host "Generating WhisperLM multi-resolution icon..."
 & $Python -c "
+import struct
+from PySide6.QtCore import QBuffer, QIODevice
 from PySide6.QtWidgets import QApplication
-from whisper_flow.ui import _build_tray_icon
+from whisper_lm.ui import render_brand_pixmap
+
 app = QApplication([])
-icon = _build_tray_icon('#F5F5F7')
-pix = icon.pixmap(64, 64)
-pix.save(r'$BuildIcon', 'ICO')
+sizes = [16, 24, 32, 48, 64, 128, 256]
+frames = []
+for s in sizes:
+    pix = render_brand_pixmap(s, '#F5F5F7')
+    buf = QBuffer()
+    buf.open(QIODevice.OpenModeFlag.WriteOnly)
+    pix.save(buf, 'PNG')
+    frames.append((s, bytes(buf.data())))
+
+header = struct.pack('<HHH', 0, 1, len(frames))
+offset = 6 + 16 * len(frames)
+entries = bytearray()
+blobs = bytearray()
+for s, data in frames:
+    dim = 0 if s >= 256 else s
+    entries += struct.pack('<BBBBHHII', dim, dim, 0, 0, 1, 32, len(data), offset)
+    offset += len(data)
+    blobs += data
+
+with open(r'$BuildIcon', 'wb') as f:
+    f.write(header + bytes(entries) + bytes(blobs))
 "
 
 $EntryScript = Join-Path $Root "build\launcher.py"
 Set-Content -Path $EntryScript -Encoding UTF8 -Value @"
-from whisper_flow.app import main
+from whisper_lm.app import main
 
 if __name__ == "__main__":
     raise SystemExit(main())
 "@
 
-Write-Host "Packaging WhisperFlow.exe with PyInstaller..."
+Write-Host "Packaging WhisperLM.exe with PyInstaller..."
 & $Python -m PyInstaller `
     --noconfirm `
     --clean `
     --windowed `
-    --name "WhisperFlow" `
+    --name "WhisperLM" `
     --icon $BuildIcon `
     --paths (Join-Path $Root "src") `
     --collect-all onnxruntime `
@@ -65,9 +86,9 @@ Write-Host "Packaging WhisperFlow.exe with PyInstaller..."
     --exclude-module unittest `
     $EntryScript
 
-$AppDist = Join-Path $Root "dist\WhisperFlow"
-if (-not (Test-Path (Join-Path $AppDist "WhisperFlow.exe"))) {
-    throw "PyInstaller build failed: WhisperFlow.exe not found."
+$AppDist = Join-Path $Root "dist\WhisperLM"
+if (-not (Test-Path (Join-Path $AppDist "WhisperLM.exe"))) {
+    throw "PyInstaller build failed: WhisperLM.exe not found."
 }
 
 Write-Host "Bundling Vulkan compute engines and Silero VAD..."
@@ -76,7 +97,7 @@ New-Item -ItemType Directory -Force -Path (Join-Path $AppDist "models") | Out-Nu
 Copy-Item -Force (Join-Path $Root "models\silero_vad.onnx") (Join-Path $AppDist "models\silero_vad.onnx")
 Copy-Item -Force (Join-Path $Root "README.md") (Join-Path $AppDist "README.md")
 
-$ZipName = "WhisperFlow-Windows-x64.zip"
+$ZipName = "WhisperLM-Windows-x64.zip"
 $ZipPath = Join-Path $ReleaseDir $ZipName
 if (Test-Path $ZipPath) {
     Remove-Item -Force $ZipPath

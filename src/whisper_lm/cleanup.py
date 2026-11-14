@@ -6,8 +6,8 @@ import re
 
 import httpx
 
-from whisper_flow.config import AppConfig
-from whisper_flow.injector import WindowContext
+from whisper_lm.config import AppConfig
+from whisper_lm.injector import WindowContext
 
 _FILLER_ONLY_RE = re.compile(r"^[\s.,!?;:\-—…\"'()\[\]،؛؟]+$")
 _HAS_ARABIC_RE = re.compile(r"[\u0600-\u06FF]")

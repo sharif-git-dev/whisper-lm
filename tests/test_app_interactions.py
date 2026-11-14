@@ -6,13 +6,13 @@ import time
 from PySide6.QtWidgets import QApplication
 import numpy as np
 
-from whisper_flow.app import WhisperFlowApp
-from whisper_flow.config import AppConfig
+from whisper_lm.app import WhisperLMApp
+from whisper_lm.config import AppConfig
 
 
-def _make_stub_app(monkeypatch, min_hold_ms: int = 120, double_tap_ms: int = 250) -> tuple[WhisperFlowApp, dict[str, int]]:
+def _make_stub_app(monkeypatch, min_hold_ms: int = 120, double_tap_ms: int = 250) -> tuple[WhisperLMApp, dict[str, int]]:
     QApplication.instance() or QApplication([])
-    monkeypatch.setattr("whisper_flow.app.play_activation_sound", lambda: None)
+    monkeypatch.setattr("whisper_lm.app.play_activation_sound", lambda: None)
 
     cfg = AppConfig(
         hotkey_hold="ctrl+win",
@@ -23,7 +23,7 @@ def _make_stub_app(monkeypatch, min_hold_ms: int = 120, double_tap_ms: int = 250
         llm_cleanup_enabled=False,
         activation_sound_enabled=False,
     )
-    app_ctrl = WhisperFlowApp(cfg, QApplication.instance())  # type: ignore[arg-type]
+    app_ctrl = WhisperLMApp(cfg, QApplication.instance())  # type: ignore[arg-type]
     app_ctrl._state = "idle"
 
     counters = {"starts": 0, "cancels": 0, "finishes": 0}
@@ -35,7 +35,7 @@ def _make_stub_app(monkeypatch, min_hold_ms: int = 120, double_tap_ms: int = 250
         return np.zeros(1600, dtype=np.float32)
 
     app_ctrl.recorder = SimpleNamespace(start=fake_start, stop=fake_stop)  # type: ignore[assignment]
-    monkeypatch.setattr("whisper_flow.app.get_foreground_context", lambda: None)
+    monkeypatch.setattr("whisper_lm.app.get_foreground_context", lambda: None)
 
     orig_cancel = app_ctrl._cancel_recording
 
@@ -113,7 +113,7 @@ def test_double_tap_locks_hands_free_until_pressed_again(monkeypatch) -> None:
 def test_meeting_start_plays_activation_chime(monkeypatch) -> None:
     app_ctrl, _counters = _make_stub_app(monkeypatch)
     chimes: list[str] = []
-    monkeypatch.setattr("whisper_flow.app.play_activation_sound", lambda: chimes.append("chime"))
+    monkeypatch.setattr("whisper_lm.app.play_activation_sound", lambda: chimes.append("chime"))
     monkeypatch.setattr(app_ctrl.meeting_recorder, "start", lambda **_kw: None)
     app_ctrl.config.activation_sound_enabled = True
 

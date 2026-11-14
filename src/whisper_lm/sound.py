@@ -57,7 +57,7 @@ def generate_activation_chime_wav(sample_rate: int = 44100) -> bytes:
 
 
 _ACTIVATION_WAV_BYTES: bytes = generate_activation_chime_wav()
-_WAV_CACHE_PATH: Path = Path(tempfile.gettempdir()) / "whisper_flow_activation_pop_v2.wav"
+_WAV_CACHE_PATH: Path = Path(tempfile.gettempdir()) / "whisper_lm_activation_pop_v2.wav"
 
 
 def _ensure_cached_wav_file() -> Path | None:

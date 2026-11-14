@@ -48,16 +48,16 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from whisper_flow.audio import AudioRecorder, list_input_devices
-from whisper_flow.config import AppConfig
-from whisper_flow.history import (
+from whisper_lm.audio import AudioRecorder, list_input_devices
+from whisper_lm.config import AppConfig
+from whisper_lm.history import (
     HistoryEntry,
     date_category_label,
     format_entry_when,
     matches_time_filter,
 )
-from whisper_flow.hotkeys import HOLD_HOTKEY_PRESETS, TOGGLE_HOTKEY_PRESETS
-from whisper_flow.meetings import MeetingRecord, format_duration
+from whisper_lm.hotkeys import HOLD_HOTKEY_PRESETS, TOGGLE_HOTKEY_PRESETS
+from whisper_lm.meetings import MeetingRecord, format_duration
 
 try:
     user32 = ctypes.WinDLL("user32", use_last_error=True)
@@ -71,7 +71,7 @@ _WS_EX_NOACTIVATE = 0x08000000
 _WS_EX_TOOLWINDOW = 0x00000080
 _DWMWA_USE_IMMUTABLE_DARK_MODE = 20
 
-# Wispr Flow-inspired matte monochrome palette
+# WhisperLM obsidian + electric indigo accent palette
 _BG_ROOT = "#0B0B0D"
 _BG_SIDEBAR = "#111114"
 _BG_CARD = "#16161A"
@@ -82,6 +82,8 @@ _BORDER_SUBTLE = "#1E1E24"
 _TEXT_PRIMARY = "#F5F5F7"
 _TEXT_SECONDARY = "#8E8E96"
 _TEXT_MUTED = "#5E5E66"
+_ACCENT_INDIGO = "#7B8BFF"
+_ACCENT_INDIGO_DEEP = "#5868F2"
 _ACCENT_GREEN = "#34D399"
 _ACCENT_RED = "#F87171"
 
@@ -161,48 +163,82 @@ class _ToggleSwitch(QAbstractButton):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         checked = self.isChecked()
 
-        track_color = QColor(_TEXT_PRIMARY if checked else "#282830")
+        track_color = QColor(_ACCENT_INDIGO if checked else "#282830")
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QBrush(track_color))
         painter.drawRoundedRect(QRectF(0, 0, self.width(), self.height()), 11.0, 11.0)
 
-        thumb_color = QColor(_BG_ROOT if checked else _TEXT_SECONDARY)
+        thumb_color = QColor("#FFFFFF" if checked else _TEXT_SECONDARY)
         painter.setBrush(QBrush(thumb_color))
         painter.drawEllipse(QRectF(self._thumb_x, 3.0, 16.0, 16.0))
 
 
-def _draw_wave_glyph(
+def _draw_spark_star(
     painter: QPainter,
-    rect: QRectF,
+    cx: float,
+    cy: float,
+    radius: float,
     color: QColor,
-    heights: tuple[float, ...] = (0.42, 0.85, 0.62, 0.95),
 ) -> None:
-    """Paint the crisp 4-bar monochrome soundwave glyph inside *rect*."""
+    """Paint a crisp 4-point AI spark star centered at (cx, cy)."""
+    inner = radius * 0.28
+    path = QPainterPath()
+    path.moveTo(cx, cy - radius)
+    path.quadTo(cx + inner, cy - inner, cx + radius, cy)
+    path.quadTo(cx + inner, cy + inner, cx, cy + radius)
+    path.quadTo(cx - inner, cy + inner, cx - radius, cy)
+    path.quadTo(cx - inner, cy - inner, cx, cy - radius)
     painter.setPen(Qt.PenStyle.NoPen)
     painter.setBrush(QBrush(color))
-    count = len(heights)
+    painter.drawPath(path)
+
+
+def _draw_whisperlm_glyph(
+    painter: QPainter,
+    rect: QRectF,
+    bar_color: QColor,
+    spark_color: QColor | None = None,
+    heights: tuple[float, ...] = (0.48, 0.94, 0.62),
+) -> None:
+    """Paint the WhisperLM emblem: 3 crisp voice bars paired with an indigo LM star spark."""
     w = rect.width()
     h = rect.height()
-    bar_w = max(1.6, w * 0.14)
-    gap = (w - count * bar_w) / max(1, count - 1)
+    bars_area_w = w * 0.62
+    count = len(heights)
+    bar_w = max(1.6, bars_area_w * 0.20)
+    gap = max(1.0, (bars_area_w - count * bar_w) / max(1, count - 1))
+
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(QBrush(bar_color))
     for idx, ratio in enumerate(heights):
-        bh = max(2.0, h * ratio)
+        bh = max(2.2, h * ratio)
         x = rect.x() + idx * (bar_w + gap)
         y = rect.y() + (h - bh) / 2.0
         painter.drawRoundedRect(QRectF(x, y, bar_w, bh), bar_w / 2.0, bar_w / 2.0)
 
+    spark_r = max(2.2, min(w * 0.21, h * 0.34))
+    spark_cx = rect.right() - spark_r
+    spark_cy = rect.y() + h * 0.36
+    sc = spark_color if spark_color is not None else QColor(123, 139, 255, bar_color.alpha())
+    _draw_spark_star(painter, spark_cx, spark_cy, spark_r, sc)
+
 
 class _BrandMark(QWidget):
-    """Crisp 4-bar monochrome soundwave icon."""
+    """Crisp WhisperLM soundwave + indigo spark icon."""
 
-    def __init__(self, size: int = 18, parent: QWidget | None = None) -> None:
+    def __init__(self, size: int = 20, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setFixedSize(size, size)
 
     def paintEvent(self, _event) -> None:
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        _draw_wave_glyph(painter, QRectF(0.0, 0.0, float(self.width()), float(self.height())), QColor(_TEXT_PRIMARY))
+        _draw_whisperlm_glyph(
+            painter,
+            QRectF(0.5, 1.0, float(self.width()) - 1.0, float(self.height()) - 2.0),
+            QColor(_TEXT_PRIMARY),
+            QColor(_ACCENT_INDIGO),
+        )
 
 
 def _draw_pill_shell(
@@ -287,8 +323,13 @@ class _WaveformWidget(QWidget):
         max_h = max(4.0, min(16.0, self.height() - 4.0))
 
         painter.setPen(Qt.PenStyle.NoPen)
-        alpha = int(round((242 if self._mode == "listening" else 170) * self._reveal))
-        painter.setBrush(QBrush(QColor(250, 250, 252, alpha)))
+        alpha = int(round((242 if self._mode == "listening" else 195) * self._reveal))
+        wave_color = (
+            QColor(123, 139, 255, alpha)
+            if self._mode in {"cleaning", "loading"}
+            else QColor(250, 250, 252, alpha)
+        )
+        painter.setBrush(QBrush(wave_color))
         scale_h = 0.4 + 0.6 * self._reveal
         for idx, val in enumerate(self._bars):
             bh = max(2.4, min(max_h, val * max_h * scale_h))
@@ -350,9 +391,9 @@ class FlowPillWidget(QWidget):
     level_received = Signal(float)
     recording_state_changed = Signal(bool)
 
-    _IDLE_SIZE = (38, 22)
-    _HOVER_SIZE = (86, 34)
-    _ACTIVE_SIZE = (100, 40)
+    _IDLE_SIZE = (42, 22)
+    _HOVER_SIZE = (88, 34)
+    _ACTIVE_SIZE = (104, 40)
 
     # (inset_x, inset_y, radius, glyph_alpha, glyph_shift_x, wave_reveal, label_alpha, rec_alpha)
     _MODE_SPECS: dict[str, tuple[float, float, float, float, float, float, float, float]] = {
@@ -659,8 +700,11 @@ class FlowPillWidget(QWidget):
             self._press_global = None
             self._drag_offset = None
             self._dragging = False
-            if not was_drag and self._on_toggle_dictate is not None:
-                self._on_toggle_dictate()
+            if not was_drag:
+                if self._state == "loading" and self._on_open_hub is not None:
+                    self._on_open_hub()
+                elif self._on_toggle_dictate is not None:
+                    self._on_toggle_dictate()
             elif not self.rect().contains(self.mapFromGlobal(QCursor.pos())):
                 self._hover_collapse_timer.start()
             event.accept()
@@ -679,7 +723,7 @@ class FlowPillWidget(QWidget):
             rec_act = menu.addAction(rec_label)
             rec_act.triggered.connect(self._on_toggle_recording)
         if self._on_open_hub is not None:
-            open_act = menu.addAction("Open Whisper Flow")
+            open_act = menu.addAction("Open WhisperLM")
             open_act.triggered.connect(self._on_open_hub)
         if self._custom_bottom_center is not None:
             reset_act = menu.addAction("Reset Icon Position")
@@ -713,19 +757,21 @@ class FlowPillWidget(QWidget):
         _draw_pill_shell(painter, rect, radius=radius, border_alpha=border_alpha, fill_alpha=fill_alpha)
 
         if glyph_a > 0.02:
-            glyph_alpha = int(round((240 if self._hovered else 172) * glyph_a))
+            glyph_alpha = int(round((242 if self._hovered else 182) * glyph_a))
+            spark_alpha = int(round((245 if self._hovered else 210) * glyph_a))
             cx = rect.center().x() + glyph_shift
             cy = rect.center().y()
-            _draw_wave_glyph(
+            _draw_whisperlm_glyph(
                 painter,
-                QRectF(cx - 5.5, cy - 4.0, 11.0, 8.0),
+                QRectF(cx - 6.5, cy - 4.5, 13.0, 9.0),
                 QColor(250, 250, 252, glyph_alpha),
+                QColor(123, 139, 255, spark_alpha),
             )
             if self._session_recording and is_idle_like and rec_a < 0.35:
                 dot_alpha = int(round(235 * glyph_a * (1.0 - rec_a / 0.35)))
                 painter.setPen(Qt.PenStyle.NoPen)
                 painter.setBrush(QColor(239, 68, 68, dot_alpha))
-                painter.drawEllipse(QRectF(cx + 6.5, cy - 4.5, 4.5, 4.5))
+                painter.drawEllipse(QRectF(cx + 8.0, cy - 5.0, 4.5, 4.5))
 
         if rec_a > 0.08:
             div_x = rect.center().x() + 2.0
@@ -821,11 +867,11 @@ class FlowPillWidget(QWidget):
             target_mode = "text"
             self._anim_timer.stop()
             self._waveform.hide()
-            preview = message if len(message) <= 20 else message[:17] + "..."
+            preview = message if len(message) <= 34 else message[:31] + "..."
             text_color = _ACCENT_RED if state == "error" else _TEXT_PRIMARY
             self._label.setStyleSheet(f"color: {text_color}; background: transparent;")
             self._label.setText(preview or ("Done" if state == "done" else "Error"))
-            w = max(112, min(184, self._label.sizeHint().width() + 40))
+            w = max(118, min(276, self._label.sizeHint().width() + 40))
             target_size = (w, 40)
 
         self._fade_anim.stop()
@@ -1117,12 +1163,14 @@ class _DictationDayGroup(QFrame):
 
 
 class FlowHubWindow(QMainWindow):
-    """Wispr Flow-inspired monochrome Hub window: Home, Meetings, Settings."""
+    """WhisperLM desktop Hub window: Home, Meetings, Dictionary, Settings."""
 
     history_added = Signal(object)
     history_loaded = Signal(list)
     meetings_updated = Signal(list)
     meeting_state_changed = Signal(str, str)  # ("recording" | "cleaning" | "summarizing" | "idle", app_name)
+    runtime_status_changed = Signal(str, int)  # (status_message, progress_percent; -1 hides setup bar)
+    open_page_requested = Signal(str)
 
     def __init__(
         self,
@@ -1162,7 +1210,8 @@ class FlowHubWindow(QMainWindow):
         self._test_recorder: AudioRecorder | None = None
         self._test_timer: QTimer | None = None
 
-        self.setWindowTitle("Whisper Flow")
+        self.setWindowTitle("WhisperLM")
+        self.setWindowIcon(_build_tray_icon(_TEXT_PRIMARY))
         self.resize(960, 650)
         self.setMinimumSize(820, 560)
         self._apply_stylesheet()
@@ -1172,6 +1221,8 @@ class FlowHubWindow(QMainWindow):
         self.history_loaded.connect(self._set_history)
         self.meetings_updated.connect(self._set_meetings)
         self.meeting_state_changed.connect(self._set_meeting_status)
+        self.runtime_status_changed.connect(self._set_runtime_status)
+        self.open_page_requested.connect(self.open_page)
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
@@ -1204,8 +1255,8 @@ class FlowHubWindow(QMainWindow):
                 color: {_TEXT_PRIMARY};
             }}
             QPushButton#NavBtn[active="true"] {{
-                background-color: #1E1E25;
-                border-color: #2B2B34;
+                background-color: #1D1D27;
+                border-color: rgba(123, 139, 255, 0.35);
                 color: {_TEXT_PRIMARY};
                 font-weight: 600;
             }}
@@ -1323,11 +1374,11 @@ class FlowHubWindow(QMainWindow):
                 padding: 6px 10px;
                 font-size: 12.5px;
             }}
-            QLineEdit:focus {{
-                border-color: #464655;
+            QLineEdit:focus, QPlainTextEdit:focus {{
+                border-color: {_ACCENT_INDIGO};
             }}
             QComboBox:hover {{
-                border-color: #3E3E4A;
+                border-color: rgba(123, 139, 255, 0.55);
             }}
             QComboBox QAbstractItemView {{
                 background-color: {_BG_CARD};
@@ -1384,7 +1435,7 @@ class FlowHubWindow(QMainWindow):
                 max-height: 6px;
             }}
             QProgressBar::chunk {{
-                background-color: {_TEXT_PRIMARY};
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 {_ACCENT_INDIGO_DEEP}, stop:1 {_ACCENT_INDIGO});
                 border-radius: 3px;
             }}
             """
@@ -1423,9 +1474,9 @@ class FlowHubWindow(QMainWindow):
         brand_row = QHBoxLayout()
         brand_row.setContentsMargins(6, 4, 6, 14)
         brand_row.setSpacing(10)
-        brand_row.addWidget(_BrandMark(18))
+        brand_row.addWidget(_BrandMark(20))
 
-        title = QLabel("Whisper Flow")
+        title = QLabel("WhisperLM")
         title.setFont(QFont("Segoe UI", 11.5, QFont.Weight.DemiBold))
         title.setStyleSheet(f"color: {_TEXT_PRIMARY};")
         brand_row.addWidget(title)
@@ -1497,6 +1548,34 @@ class FlowHubWindow(QMainWindow):
         clear_btn.clicked.connect(self._confirm_and_clear_history)
         header.addWidget(clear_btn)
         outer.addLayout(header)
+
+        # Runtime setup / download status banner (hidden once Ready)
+        self._setup_banner = QFrame()
+        self._setup_banner.setObjectName("Card")
+        self._setup_banner.setStyleSheet(
+            f"QFrame#Card {{ background-color: #14141C; border: 1px solid rgba(123, 139, 255, 0.38); border-radius: 12px; }}"
+        )
+        sb = QVBoxLayout(self._setup_banner)
+        sb.setContentsMargins(16, 12, 16, 12)
+        sb.setSpacing(8)
+        sb_top = QHBoxLayout()
+        sb_dot = QLabel("✦")
+        sb_dot.setStyleSheet(f"color: {_ACCENT_INDIGO}; font-size: 13px;")
+        self._setup_status_lbl = QLabel("Preparing local AI models...")
+        self._setup_status_lbl.setStyleSheet(f"color: {_TEXT_PRIMARY}; font-size: 12.5px; font-weight: 500;")
+        self._setup_pct_lbl = QLabel("")
+        self._setup_pct_lbl.setStyleSheet(f"color: {_ACCENT_INDIGO}; font-size: 12px; font-weight: 600;")
+        sb_top.addWidget(sb_dot)
+        sb_top.addWidget(self._setup_status_lbl, 1)
+        sb_top.addWidget(self._setup_pct_lbl)
+        self._setup_progress = QProgressBar()
+        self._setup_progress.setTextVisible(False)
+        self._setup_progress.setRange(0, 100)
+        self._setup_progress.setValue(0)
+        sb.addLayout(sb_top)
+        sb.addWidget(self._setup_progress)
+        self._setup_banner.hide()
+        outer.addWidget(self._setup_banner)
 
         metrics = QHBoxLayout()
         metrics.setSpacing(12)
@@ -1977,6 +2056,16 @@ class FlowHubWindow(QMainWindow):
         self._meeting_summary_switch.setChecked(cfg.meeting_summary_enabled)
         self._rebuild_dictionary_list()
 
+    def _set_runtime_status(self, message: str, percent: int) -> None:
+        self._sidebar_status_lbl.setText(message or "Ready")
+        if percent < 0:
+            self._setup_banner.hide()
+            return
+        self._setup_status_lbl.setText(message)
+        self._setup_progress.setValue(max(0, min(100, percent)))
+        self._setup_pct_lbl.setText(f"{percent}%" if percent > 0 else "")
+        self._setup_banner.show()
+
     # --- Custom Dictionary ---
 
     def _rebuild_dictionary_list(self) -> None:
@@ -2419,23 +2508,33 @@ class FlowHubWindow(QMainWindow):
 ControlCenterWindow = FlowHubWindow
 
 
-def _build_tray_icon(dot_color: str) -> QIcon:
-    pix = QPixmap(64, 64)
+def render_brand_pixmap(size: int = 64, dot_color: str = _TEXT_PRIMARY) -> QPixmap:
+    """Render the crisp WhisperLM rounded obsidian squircle emblem at any size."""
+    pix = QPixmap(size, size)
     pix.fill(Qt.GlobalColor.transparent)
     painter = QPainter(pix)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-    painter.setBrush(QBrush(QColor(15, 15, 18)))
-    painter.setPen(QPen(QColor(255, 255, 255, 40), 2.5))
-    painter.drawRoundedRect(4, 4, 56, 56, 16, 16)
+    m = size * (4.0 / 64.0)
+    box = QRectF(m, m, size - 2.0 * m, size - 2.0 * m)
+    radius = size * (16.0 / 64.0)
+    bg = QLinearGradient(box.topLeft(), box.bottomRight())
+    bg.setColorAt(0.0, QColor(20, 20, 28))
+    bg.setColorAt(1.0, QColor(11, 11, 15))
+    painter.setBrush(QBrush(bg))
+    painter.setPen(QPen(QColor(123, 139, 255, 110), max(1.2, size * (2.2 / 64.0))))
+    painter.drawRoundedRect(box, radius, radius)
 
-    painter.setPen(Qt.PenStyle.NoPen)
-    painter.setBrush(QBrush(QColor(dot_color)))
-    bars = [(18, 26, 5, 12), (26, 17, 5, 30), (34, 21, 5, 22), (42, 19, 5, 26)]
-    for x, y, w, h in bars:
-        painter.drawRoundedRect(x, y, w, h, 2.5, 2.5)
+    spark_hex = _ACCENT_INDIGO if dot_color == _TEXT_PRIMARY else dot_color
+    pad = size * (15.0 / 64.0)
+    glyph_rect = QRectF(pad, pad, size - 2.0 * pad, size - 2.0 * pad)
+    _draw_whisperlm_glyph(painter, glyph_rect, QColor(dot_color), QColor(spark_hex))
     painter.end()
-    return QIcon(pix)
+    return pix
+
+
+def _build_tray_icon(dot_color: str) -> QIcon:
+    return QIcon(render_brand_pixmap(64, dot_color))
 
 
 class TrayController(QWidget):
@@ -2470,12 +2569,12 @@ class TrayController(QWidget):
         self._menu = QMenu()
         self._menu.setStyleSheet(_DARK_MENU_QSS)
 
-        self._status_action = QAction("Starting Whisper Flow...", self._menu)
+        self._status_action = QAction("Starting WhisperLM...", self._menu)
         self._status_action.setEnabled(False)
         self._menu.addAction(self._status_action)
         self._menu.addSeparator()
 
-        open_action = QAction("Open Whisper Flow", self._menu)
+        open_action = QAction("Open WhisperLM", self._menu)
         open_action.triggered.connect(lambda: self._window.open_page("home"))
         self._menu.addAction(open_action)
 
@@ -2558,7 +2657,7 @@ class TrayController(QWidget):
     def set_status(self, status_text: str, dot_color: str = _TEXT_PRIMARY) -> None:
         self._status_action.setText(status_text)
         self._tray.setIcon(_build_tray_icon(dot_color))
-        self._tray.setToolTip(f"Whisper Flow — {status_text}")
+        self._tray.setToolTip(f"WhisperLM — {status_text}")
 
     def hide(self) -> None:
         self._tray.hide()

@@ -2,7 +2,7 @@
 
 import pytest
 
-from whisper_flow.hotkeys import (
+from whisper_lm.hotkeys import (
     is_modifier_only_spec,
     matches_hotkey_press,
     parse_hotkey,

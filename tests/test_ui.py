@@ -2,10 +2,21 @@
 
 from PySide6.QtWidgets import QApplication
 
-from whisper_flow.app import _acquire_single_instance_mutex
-from whisper_flow.config import AppConfig
-from whisper_flow.meetings import MeetingRecord
-from whisper_flow.ui import FlowHubWindow, FlowPillWidget, HistoryEntry, MeetingPillWidget, TrayController
+from whisper_lm.app import (
+    _acquire_single_instance_mutex,
+    _signal_existing_instance,
+    _start_ipc_server,
+)
+from whisper_lm.config import AppConfig
+from whisper_lm.meetings import MeetingRecord
+from whisper_lm.ui import (
+    FlowHubWindow,
+    FlowPillWidget,
+    HistoryEntry,
+    MeetingPillWidget,
+    TrayController,
+    render_brand_pixmap,
+)
 
 
 def test_hud_animation_moves_bars_when_listening() -> None:
@@ -273,7 +284,7 @@ def test_single_instance_mutex_blocks_duplicate() -> None:
     import ctypes
     import uuid
 
-    test_name = f"Local\\WhisperFlowTest_{uuid.uuid4().hex}"
+    test_name = f"Local\\WhisperLMTest_{uuid.uuid4().hex}"
     first = _acquire_single_instance_mutex(test_name)
     try:
         assert first is not None
@@ -286,9 +297,9 @@ def test_single_instance_mutex_blocks_duplicate() -> None:
 
 def test_hub_meeting_summary_tab_trigger_and_settings() -> None:
     app = QApplication.instance() or QApplication([])
-    from whisper_flow.config import AppConfig
-    from whisper_flow.meetings import MeetingRecord
-    from whisper_flow.ui import FlowHubWindow, MeetingPillWidget
+    from whisper_lm.config import AppConfig
+    from whisper_lm.meetings import MeetingRecord
+    from whisper_lm.ui import FlowHubWindow, MeetingPillWidget
 
     saved_cfgs: list[AppConfig] = []
     summarized_ids: list[str] = []
@@ -346,8 +357,8 @@ def test_hub_meeting_summary_tab_trigger_and_settings() -> None:
 
 def test_arabic_toggle_in_settings_and_tray() -> None:
     app = QApplication.instance() or QApplication([])
-    from whisper_flow.config import AppConfig
-    from whisper_flow.ui import FlowHubWindow, TrayController
+    from whisper_lm.config import AppConfig
+    from whisper_lm.ui import FlowHubWindow, TrayController
 
     saved_cfgs: list[AppConfig] = []
     tray_toggles: list[bool] = []
@@ -379,3 +390,44 @@ def test_arabic_toggle_in_settings_and_tray() -> None:
     app.processEvents()
     tray.hide()
     hub.close()
+
+
+def test_whisperlm_brand_icon_setup_banner_and_ipc_activate() -> None:
+    import time
+    import uuid
+
+    app = QApplication.instance() or QApplication([])
+    pix = render_brand_pixmap(64)
+    assert not pix.isNull()
+    assert pix.width() == 64 and pix.height() == 64
+
+    hub = FlowHubWindow(
+        config=AppConfig(),
+        on_save_config=lambda _c: None,
+        on_copy_text=lambda _t: None,
+    )
+    assert hub.windowTitle() == "WhisperLM"
+
+    hub.runtime_status_changed.emit("Downloading Whisper speech model... 42%", 42)
+    app.processEvents()
+    assert hub._setup_banner.isVisibleTo(hub)
+    assert hub._setup_progress.value() == 42
+    assert hub._setup_pct_lbl.text() == "42%"
+
+    hub.runtime_status_changed.emit("Ready", -1)
+    app.processEvents()
+    assert not hub._setup_banner.isVisibleTo(hub)
+
+    activated: list[str] = []
+    bus_name = f"WhisperLM_Test_{uuid.uuid4().hex}"
+    server = _start_ipc_server(lambda: activated.append("up"), server_name=bus_name)
+    try:
+        assert _signal_existing_instance(server_name=bus_name) is True
+        deadline = time.monotonic() + 1.0
+        while not activated and time.monotonic() < deadline:
+            app.processEvents()
+            time.sleep(0.01)
+        assert activated == ["up"]
+    finally:
+        server.close()
+        hub.close()

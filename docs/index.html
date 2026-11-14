@@ -3,10 +3,15 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Whisper Flow — Local Voice Dictation, Meeting Capture & AI Summaries</title>
+    <title>WhisperLM — Local Voice Dictation, Meeting Capture & AI Summaries</title>
+    <link
+      rel="icon"
+      type="image/svg+xml"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='2' y='2' width='28' height='28' rx='8' fill='%230d0d12' stroke='%237b8bff' stroke-opacity='0.55' stroke-width='1.5'/%3E%3Crect x='6.5' y='13' width='3' height='8' rx='1.5' fill='%23f5f5f7'/%3E%3Crect x='11' y='8.5' width='3' height='15' rx='1.5' fill='%23f5f5f7'/%3E%3Crect x='15.5' y='11.5' width='3' height='10' rx='1.5' fill='%23f5f5f7'/%3E%3Cpath d='M22.5 7 C23 9.8 24 10.8 26.8 11.2 C24 11.6 23 12.6 22.5 15.5 C22 12.6 21 11.6 18.2 11.2 C21 10.8 22 9.8 22.5 7 Z' fill='%237b8bff'/%3E%3C/svg%3E"
+    />
     <meta
       name="description"
-      content="Speak naturally on Windows. 100% local push-to-talk dictation, automatic meeting recording, speaker separation, and instant AI summaries powered by your own GPU."
+      content="WhisperLM: 100% local push-to-talk dictation, automatic meeting recording, speaker separation, and instant AI summaries powered by your own GPU on Windows."
     />
     <link rel="stylesheet" href="styles.css" />
   </head>
@@ -23,9 +28,18 @@
       <div class="nav-inner">
         <a href="#" class="brand">
           <span class="brand-icon" aria-hidden="true">
-            <span></span><span></span><span></span><span></span>
+            <svg class="brand-svg" viewBox="0 0 24 24" fill="none">
+              <rect class="brand-bar b1" x="2.5" y="9" width="3" height="8" rx="1.5" fill="#F5F5F7" />
+              <rect class="brand-bar b2" x="7" y="4.5" width="3" height="15" rx="1.5" fill="#F5F5F7" />
+              <rect class="brand-bar b3" x="11.5" y="7.5" width="3" height="10" rx="1.5" fill="#F5F5F7" />
+              <path
+                class="brand-spark"
+                d="M18.5 3.5 C19 6.5 20 7.5 23 8 C20 8.5 19 9.5 18.5 12.5 C18 9.5 17 8.5 14 8 C17 7.5 18 6.5 18.5 3.5 Z"
+                fill="#7B8BFF"
+              />
+            </svg>
           </span>
-          <span>Whisper Flow</span>
+          <span>Whisper<span class="brand-accent">LM</span></span>
         </a>
 
         <nav class="nav-links" aria-label="Main navigation">
@@ -36,7 +50,7 @@
 
         <div class="nav-actions">
           <a
-            href="https://github.com/sharif-git-dev/whisper-flow"
+            href="https://github.com/sharif-git-dev/whisper-lm"
             target="_blank"
             rel="noopener"
             class="btn-pill btn-ghost"
@@ -53,11 +67,11 @@
       <section class="hero">
         <div class="hero-badge reveal visible">
           <span class="pulse-dot"></span>
-          <span>100% Local on Windows · Vulkan GPU Accelerated</span>
+          <span>WhisperLM · 100% Local on Windows · Vulkan GPU</span>
         </div>
 
         <h1 class="hero-title text-gradient reveal visible">
-          Speak naturally.<br />Type effortlessly.
+          Speak naturally.<br />Think &amp; type effortlessly.
         </h1>
 
         <p class="hero-sub reveal visible">
@@ -67,14 +81,14 @@
 
         <div class="hero-cta-row reveal visible">
           <a
-            href="https://github.com/sharif-git-dev/whisper-flow/releases/download/v0.1.0/WhisperFlow-Windows-x64.zip"
+            href="https://github.com/sharif-git-dev/whisper-lm/releases/download/v0.1.0/WhisperLM-Windows-x64.zip"
             data-download-cta
             class="btn-pill btn-primary btn-lg"
           >
-            Download for Windows (.zip)
+            Download WhisperLM (.zip)
           </a>
           <a
-            href="https://github.com/sharif-git-dev/whisper-flow"
+            href="https://github.com/sharif-git-dev/whisper-lm"
             target="_blank"
             rel="noopener"
             class="btn-pill btn-ghost btn-lg"
@@ -182,7 +196,7 @@
       <section class="section" id="features">
         <div class="section-header reveal">
           <div class="section-eyebrow">Built for Speed &amp; Focus</div>
-          <h2 class="section-title">Everything Wispr Flow gets right, running privately on your PC.</h2>
+          <h2 class="section-title">Flagship voice clarity, running privately on your PC.</h2>
           <p class="section-desc">
             From one-handed push-to-talk dictation in any text field to full speaker-separated meeting summaries.
           </p>
@@ -320,7 +334,7 @@
       <section class="section" id="download">
         <div class="section-header reveal">
           <div class="section-eyebrow">Get Started</div>
-          <h2 class="section-title">Download Whisper Flow for Windows.</h2>
+          <h2 class="section-title">Download WhisperLM for Windows.</h2>
           <p class="section-desc">
             Ready-to-run desktop bundle or full reproducible open-source repository — everything runs on your hardware.
           </p>
@@ -329,14 +343,14 @@
         <div class="download-grid">
           <div class="download-card reveal">
             <div>
-              <div class="section-eyebrow" style="color: var(--accent-emerald)">Recommended for Everyone</div>
+              <div class="section-eyebrow" style="color: var(--accent-indigo)">Recommended for Everyone</div>
               <h3 class="card-title" style="font-size: 22px">Portable Windows Desktop App</h3>
               <p class="card-desc" style="margin-bottom: 18px">
                 Pre-packaged desktop executable with Vulkan speech &amp; AI runtimes and Silero VAD included. No Python or Git needed.
               </p>
               <ul class="steps-list">
-                <li><span class="step-num">1</span><span>Download and extract <strong>WhisperFlow-Windows-x64.zip</strong>.</span></li>
-                <li><span class="step-num">2</span><span>Double-click <strong>WhisperFlow.exe</strong> (first launch downloads local AI weights automatically).</span></li>
+                <li><span class="step-num">1</span><span>Download and extract <strong>WhisperLM-Windows-x64.zip</strong>.</span></li>
+                <li><span class="step-num">2</span><span>Double-click <strong>WhisperLM.exe</strong> (first launch opens Setup and downloads local AI weights automatically).</span></li>
                 <li><span class="step-num">3</span><span>Hold <span class="kbd">Ctrl</span> + <span class="kbd">Win</span> in any app to dictate immediately.</span></li>
               </ul>
             </div>
@@ -344,14 +358,14 @@
             <div>
               <div style="display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 12px">
                 <a
-                  href="https://github.com/sharif-git-dev/whisper-flow/releases/download/v0.1.0/WhisperFlow-Windows-x64.zip"
+                  href="https://github.com/sharif-git-dev/whisper-lm/releases/download/v0.1.0/WhisperLM-Windows-x64.zip"
                   data-download-cta
                   class="btn-pill btn-primary btn-lg"
                 >
-                  Download WhisperFlow-Windows-x64.zip
+                  Download WhisperLM-Windows-x64.zip
                 </a>
                 <a
-                  href="https://github.com/sharif-git-dev/whisper-flow/releases"
+                  href="https://github.com/sharif-git-dev/whisper-lm/releases"
                   target="_blank"
                   rel="noopener"
                   class="btn-pill btn-ghost"
@@ -376,8 +390,8 @@
               <p class="card-desc" style="margin-bottom: 16px">
                 Clone the repository and run the automated PowerShell setup script to create <code>.venv</code>, download models, and launch silently.
               </p>
-              <pre class="code-box" id="installCmdBox">git clone https://github.com/sharif-git-dev/whisper-flow.git
-cd whisper-flow
+              <pre class="code-box" id="installCmdBox">git clone https://github.com/sharif-git-dev/whisper-lm.git
+cd whisper-lm
 powershell -ExecutionPolicy Bypass -File scripts\setup.ps1
 wscript start_silent.vbs</pre>
             </div>
@@ -385,12 +399,12 @@ wscript start_silent.vbs</pre>
             <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap">
               <button type="button" id="copyInstallBtn" class="btn-pill btn-ghost">Copy Command</button>
               <a
-                href="https://github.com/sharif-git-dev/whisper-flow"
+                href="https://github.com/sharif-git-dev/whisper-lm"
                 target="_blank"
                 rel="noopener"
                 style="font-size: 13px; color: var(--text-secondary)"
               >
-                github.com/sharif-git-dev/whisper-flow →
+                github.com/sharif-git-dev/whisper-lm →
               </a>
             </div>
           </div>
@@ -401,11 +415,11 @@ wscript start_silent.vbs</pre>
     <footer class="footer">
       <div class="container footer-inner">
         <div>
-          <strong>Whisper Flow</strong> · Built by Sharif Jamo · Runs locally on your hardware
+          <strong>WhisperLM</strong> · Built by Sharif Jamo · Runs locally on your hardware
         </div>
         <div class="footer-links">
-          <a href="https://github.com/sharif-git-dev/whisper-flow" target="_blank" rel="noopener">GitHub Repo</a>
-          <a href="https://github.com/sharif-git-dev/whisper-flow/releases" target="_blank" rel="noopener">Releases</a>
+          <a href="https://github.com/sharif-git-dev/whisper-lm" target="_blank" rel="noopener">GitHub Repo</a>
+          <a href="https://github.com/sharif-git-dev/whisper-lm/releases" target="_blank" rel="noopener">Releases</a>
           <a href="#">Back to top ↑</a>
         </div>
       </div>

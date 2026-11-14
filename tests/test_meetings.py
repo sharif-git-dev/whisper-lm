@@ -5,8 +5,8 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from whisper_flow.config import AppConfig
-from whisper_flow.meetings import (
+from whisper_lm.config import AppConfig
+from whisper_lm.meetings import (
     DetectedMeeting,
     MeetingDetector,
     MeetingRecord,
@@ -22,7 +22,7 @@ def test_classify_active_meeting_browser_titles_and_ignores_self() -> None:
     idle = classify_active_meeting(
         windows=[
             ("chrome.exe", "Lo-fi hip hop radio - YouTube - Google Chrome"),
-            ("python.exe", "Whisper Flow"),
+            ("python.exe", "WhisperLM"),
         ],
         active_mic_apps={"python.exe"},
     )
@@ -72,7 +72,7 @@ def test_meeting_detector_debounce_and_manual_stop_suppression() -> None:
         stop_debounce_seconds=6.0,
     )
 
-    from whisper_flow import meetings as m_mod
+    from whisper_lm import meetings as m_mod
 
     orig_win = m_mod.list_visible_windows
     orig_mic = m_mod.get_active_microphone_apps
@@ -120,7 +120,7 @@ def test_timed_mix_buffer_aligns_intermittent_loopback() -> None:
 
 
 def test_timed_mix_buffer_separates_multiple_loopback_tracks() -> None:
-    from whisper_flow.meetings import _apply_loopback_gain
+    from whisper_lm.meetings import _apply_loopback_gain
 
     buf = TimedMixBuffer(target_rate=100)
     buf.reset(now=10.0)
@@ -183,7 +183,7 @@ def test_meeting_recorder_controller_chunk_and_cleanup(tmp_path: Path, monkeypat
         def stop(self) -> np.ndarray:
             return np.full(8000, 0.2, dtype=np.float32)
 
-    monkeypatch.setattr("whisper_flow.meetings.DualStreamAudioCapture", FakeCapture)
+    monkeypatch.setattr("whisper_lm.meetings.DualStreamAudioCapture", FakeCapture)
 
     class FakeAsr:
         def transcribe(self, _wav_bytes: bytes):
@@ -246,7 +246,7 @@ def test_meeting_live_chunk_flushes_on_pause_before_stop(tmp_path: Path, monkeyp
         def stop(self) -> np.ndarray:
             return np.zeros(0, dtype=np.float32)
 
-    monkeypatch.setattr("whisper_flow.meetings.DualStreamAudioCapture", FakeCapture)
+    monkeypatch.setattr("whisper_lm.meetings.DualStreamAudioCapture", FakeCapture)
 
     class FakeAsr:
         def transcribe(self, _wav_bytes: bytes):
@@ -280,9 +280,9 @@ def test_meeting_live_chunk_flushes_on_pause_before_stop(tmp_path: Path, monkeyp
 def test_dual_channel_diarization_cleanup_and_summary(tmp_path: Path, monkeypatch) -> None:
     import time
     import numpy as np
-    from whisper_flow.asr import TranscriptionResult
-    from whisper_flow.config import AppConfig
-    from whisper_flow.meetings import DrainedChannels, MeetingRecord, MeetingRecorderController, MeetingStore
+    from whisper_lm.asr import TranscriptionResult
+    from whisper_lm.config import AppConfig
+    from whisper_lm.meetings import DrainedChannels, MeetingRecord, MeetingRecorderController, MeetingStore
 
     cfg = AppConfig(
         meetings_dir=str(tmp_path / "meetings"),
@@ -326,7 +326,7 @@ def test_dual_channel_diarization_cleanup_and_summary(tmp_path: Path, monkeypatc
         def stop(self) -> np.ndarray:
             return np.empty(0, dtype=np.float32)
 
-    monkeypatch.setattr("whisper_flow.meetings.DualStreamAudioCapture", DualFakeCapture)
+    monkeypatch.setattr("whisper_lm.meetings.DualStreamAudioCapture", DualFakeCapture)
 
     class DualFakeAsr:
         def __init__(self) -> None:

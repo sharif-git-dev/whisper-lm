@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 import httpx
 
-from whisper_flow.config import AppConfig
+from whisper_lm.config import AppConfig
 
 
 @dataclass(frozen=True)

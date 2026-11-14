@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from whisper_flow.diarization import (
+from whisper_lm.diarization import (
     SpeakerTracker,
     append_speaker_turn,
     extract_speaker_embedding,

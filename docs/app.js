@@ -1,8 +1,8 @@
 (() => {
   const REPO_OWNER = "sharif-git-dev";
-  const REPO_NAME = "whisper-flow";
+  const REPO_NAME = "whisper-lm";
   const RELEASE_FALLBACK_URL = `https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/latest`;
-  const ASSET_DIRECT_URL = `https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/download/v0.1.0/WhisperFlow-Windows-x64.zip`;
+  const ASSET_DIRECT_URL = `https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/download/v0.1.0/WhisperLM-Windows-x64.zip`;
 
   // 1. WebAudio tactile Wispr-style "pop" sound cue (mirrors sound.py synthesis cleanly)
   let audioCtx = null;

@@ -7,9 +7,9 @@ import wave
 import numpy as np
 import pytest
 
-from whisper_flow.audio import float32_to_wav_bytes, resample_mono
-from whisper_flow.sound import generate_activation_chime_wav, play_activation_sound
-from whisper_flow.vad import SileroVAD
+from whisper_lm.audio import float32_to_wav_bytes, resample_mono
+from whisper_lm.sound import generate_activation_chime_wav, play_activation_sound
+from whisper_lm.vad import SileroVAD
 
 
 def test_float32_to_wav_bytes_roundtrip() -> None:
@@ -54,7 +54,7 @@ def test_activation_chime_wav_is_valid_and_gentle() -> None:
 
 
 def test_resample_attenuates_aliasing_and_prepare_speech_boosts_quiet_voice(monkeypatch) -> None:
-    from whisper_flow.audio import prepare_speech_for_asr
+    from whisper_lm.audio import prepare_speech_for_asr
 
     # 15 kHz tone at 48 kHz exceeds 8 kHz Nyquist of 16 kHz target -> anti-aliasing filter must crush it
     t48 = np.arange(48000, dtype=np.float32) / 48000.0

@@ -3,7 +3,7 @@
 from datetime import date
 from pathlib import Path
 
-from whisper_flow.history import (
+from whisper_lm.history import (
     DictationStore,
     HistoryEntry,
     date_category_label,

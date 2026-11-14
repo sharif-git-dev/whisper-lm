@@ -3,9 +3,9 @@ requires = ["setuptools>=68.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "whisper-flow"
+name = "whisper-lm"
 version = "0.1.0"
-description = "Local Windows dictation app powered by Vulkan whisper.cpp, Silero VAD, and llama.cpp"
+description = "WhisperLM: Local Windows voice dictation and meeting intelligence powered by Vulkan whisper.cpp, Silero VAD, and llama.cpp"
 requires-python = ">=3.11"
 dependencies = [
     "PySide6>=6.7.0",
@@ -17,7 +17,7 @@ dependencies = [
 ]
 
 [project.scripts]
-whisper-flow = "whisper_flow.app:main"
+whisper-lm = "whisper_lm.app:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

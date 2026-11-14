@@ -11,7 +11,7 @@ from pathlib import Path
 
 import httpx
 
-from whisper_flow.config import AppConfig
+from whisper_lm.config import AppConfig
 
 CREATE_NO_WINDOW = 0x08000000
 

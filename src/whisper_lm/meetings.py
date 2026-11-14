@@ -16,17 +16,17 @@ import winreg
 
 import numpy as np
 
-from whisper_flow.asr import WhisperServerClient
-from whisper_flow.audio import float32_to_wav_bytes, prepare_speech_for_asr, resample_mono
-from whisper_flow.cleanup import LlmCleanupClient
-from whisper_flow.config import AppConfig
-from whisper_flow.diarization import (
+from whisper_lm.asr import WhisperServerClient
+from whisper_lm.audio import float32_to_wav_bytes, prepare_speech_for_asr, resample_mono
+from whisper_lm.cleanup import LlmCleanupClient
+from whisper_lm.config import AppConfig
+from whisper_lm.diarization import (
     ChannelTurn,
     SpeakerTracker,
     append_speaker_turn,
     segment_channel_turns,
 )
-from whisper_flow.vad import SileroVAD
+from whisper_lm.vad import SileroVAD
 
 user32 = ctypes.WinDLL("user32", use_last_error=True)
 kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -59,6 +59,9 @@ _PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 _DEFAULT_IGNORE_APPS = frozenset({
     "python.exe",
     "pythonw.exe",
+    "whisperlm.exe",
+    "whisper-lm.exe",
+    "whisperflow.exe",
     "whisper-flow.exe",
     "whisper-server.exe",
     "llama-server.exe",

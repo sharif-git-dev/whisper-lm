@@ -5,7 +5,7 @@ import sys
 
 import pytest
 
-from whisper_flow.config import AppConfig, get_project_root
+from whisper_lm.config import AppConfig, get_project_root
 
 
 def test_config_roundtrip(tmp_path: Path) -> None:
@@ -64,7 +64,7 @@ def test_meeting_config_defaults_and_backward_compat(tmp_path: Path) -> None:
 
 
 def test_get_project_root_frozen_and_source(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    fake_exe = tmp_path / "portable" / "WhisperFlow.exe"
+    fake_exe = tmp_path / "portable" / "WhisperLM.exe"
     fake_exe.parent.mkdir(parents=True)
     fake_exe.write_bytes(b"")
 
@@ -74,4 +74,4 @@ def test_get_project_root_frozen_and_source(monkeypatch: pytest.MonkeyPatch, tmp
 
     monkeypatch.delattr(sys, "frozen", raising=False)
     root = get_project_root()
-    assert (root / "src" / "whisper_flow" / "config.py").exists()
+    assert (root / "src" / "whisper_lm" / "config.py").exists()

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import ctypes
+import logging
+from logging.handlers import RotatingFileHandler
 import os
 import sys
 import threading
@@ -11,31 +13,32 @@ from ctypes import wintypes
 from pathlib import Path
 
 import numpy as np
+from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtWidgets import QApplication
 
-from whisper_flow.asr import WhisperServerClient
-from whisper_flow.audio import AudioRecorder, float32_to_wav_bytes, prepare_speech_for_asr
-from whisper_flow.bootstrap import ensure_assets_downloaded, missing_assets
-from whisper_flow.cleanup import LlmCleanupClient
-from whisper_flow.config import AppConfig
-from whisper_flow.history import DictationStore
-from whisper_flow.hotkeys import GlobalHotkeyListener
-from whisper_flow.injector import (
+from whisper_lm.asr import WhisperServerClient
+from whisper_lm.audio import AudioRecorder, float32_to_wav_bytes, prepare_speech_for_asr
+from whisper_lm.bootstrap import ensure_assets_downloaded, missing_assets
+from whisper_lm.cleanup import LlmCleanupClient
+from whisper_lm.config import AppConfig, get_project_root
+from whisper_lm.history import DictationStore
+from whisper_lm.hotkeys import GlobalHotkeyListener
+from whisper_lm.injector import (
     WindowContext,
     get_foreground_context,
     paste_text_at_cursor,
     set_clipboard_text,
 )
-from whisper_flow.meetings import (
+from whisper_lm.meetings import (
     DetectedMeeting,
     MeetingDetector,
     MeetingRecord,
     MeetingRecorderController,
     MeetingStore,
 )
-from whisper_flow.servers import ServerManager
-from whisper_flow.sound import play_activation_sound
-from whisper_flow.ui import (
+from whisper_lm.servers import ServerManager
+from whisper_lm.sound import play_activation_sound
+from whisper_lm.ui import (
     FlowHubWindow,
     FlowPillWidget,
     HistoryEntry,
@@ -43,10 +46,14 @@ from whisper_flow.ui import (
     TrayController,
     current_timestamp,
 )
-from whisper_flow.vad import SileroVAD
+from whisper_lm.vad import SileroVAD
+
+_logger = logging.getLogger("whisper_lm")
+_MUTEX_NAME = "Local\\WhisperLMSingleInstanceMutex"
+_IPC_SERVER_NAME = "WhisperLM_InstanceBus"
 
 
-class WhisperFlowApp:
+class WhisperLMApp:
     """Orchestrates local dictation and automatic meeting recording."""
 
     def __init__(self, config: AppConfig, qt_app: QApplication) -> None:
@@ -142,23 +149,36 @@ class WhisperFlowApp:
             on_level=self.hud.level_received.emit,
         )
 
-    def start(self) -> None:
+    def start(self, open_hub_on_start: bool = False) -> None:
         """Boot background inference engines and enable global hotkeys."""
-        self.hud.state_requested.emit("loading", "Starting Whisper Flow...", 0)
+        self.hud.state_requested.emit("loading", "Starting WhisperLM...", 0)
+        self.window.runtime_status_changed.emit("Starting WhisperLM engines...", 10)
+        if open_hub_on_start:
+            self.window.open_page_requested.emit("home")
         threading.Thread(target=self._boot_worker, name="boot-servers", daemon=True).start()
 
     def _boot_worker(self) -> None:
         try:
             if missing_assets(self.config):
+                self.window.open_page_requested.emit("home")
+
                 def _on_dl_progress(msg: str) -> None:
-                    self.tray.status_requested.emit(msg, "#F5F5F7")
+                    self.tray.status_requested.emit(msg, "#7B8BFF")
                     self.hud.state_requested.emit("loading", msg, 0)
 
-                ensure_assets_downloaded(self.config, on_progress=_on_dl_progress)
+                def _on_dl_percent(pct: int, msg: str) -> None:
+                    self.window.runtime_status_changed.emit(msg, pct)
+
+                ensure_assets_downloaded(
+                    self.config,
+                    on_progress=_on_dl_progress,
+                    on_percent=_on_dl_percent,
+                )
                 if self.vad is None:
                     self.vad = self._load_vad()
                     self.meeting_recorder.vad = self.vad
-                self.hud.state_requested.emit("loading", "Starting Whisper Flow...", 0)
+                self.hud.state_requested.emit("loading", "Starting WhisperLM...", 0)
+                self.window.runtime_status_changed.emit("Starting WhisperLM engines...", 98)
 
             self.servers.start(wait_timeout_s=90.0)
             self.hotkeys.start()
@@ -166,12 +186,15 @@ class WhisperFlowApp:
             with self._lock:
                 self._state = "idle"
             self.tray.status_requested.emit("Ready", "#F5F5F7")
+            self.window.runtime_status_changed.emit("Ready", -1)
             label = self.config.hotkey_hold.replace("+", " + ").replace("_", " ").title()
             self.hud.state_requested.emit("done", f"Ready ({label})", 1800)
         except Exception as exc:
+            _logger.exception("WhisperLM startup failed")
             with self._lock:
                 self._state = "error"
             self.tray.status_requested.emit(f"Startup failed: {exc}", "#f87171")
+            self.window.runtime_status_changed.emit(f"Startup failed: {exc}", 0)
             self.hud.state_requested.emit("error", "Startup failed (check logs)", 4000)
 
     def _cancel_tap_timer_locked(self) -> None:
@@ -255,6 +278,7 @@ class WhisperFlowApp:
             self.tray.status_requested.emit("Listening...", "#34d399")
             self.hud.state_requested.emit("listening", "", 0)
         except Exception:
+            _logger.exception("Microphone start failed")
             with self._lock:
                 self._state = "idle"
                 self._active_mode = None
@@ -345,6 +369,7 @@ class WhisperFlowApp:
             self.history_store.append(entry)
             self.window.history_added.emit(entry)
         except Exception:
+            _logger.exception("Dictation processing failed")
             self.hud.state_requested.emit("error", "Transcription error", 2000)
         finally:
             with self._lock:
@@ -524,8 +549,30 @@ class WhisperFlowApp:
         self.qt_app.quit()
 
 
-def _acquire_single_instance_mutex(name: str = "Local\\WhisperFlowSingleInstanceMutex") -> int | None:
-    """Ensure only one Whisper Flow instance runs at a time."""
+WhisperFlowApp = WhisperLMApp
+
+
+def _configure_logging(log_dir: Path) -> None:
+    try:
+        log_dir.mkdir(parents=True, exist_ok=True)
+        handler = RotatingFileHandler(
+            log_dir / "app.log",
+            maxBytes=512 * 1024,
+            backupCount=2,
+            encoding="utf-8",
+        )
+        handler.setFormatter(
+            logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+        )
+        _logger.handlers.clear()
+        _logger.addHandler(handler)
+        _logger.setLevel(logging.INFO)
+    except Exception:
+        pass
+
+
+def _acquire_single_instance_mutex(name: str = _MUTEX_NAME) -> int | None:
+    """Ensure only one WhisperLM instance runs at a time."""
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
     kernel32.CreateMutexW.argtypes = [ctypes.c_void_p, wintypes.BOOL, wintypes.LPCWSTR]
     kernel32.CreateMutexW.restype = wintypes.HANDLE
@@ -538,20 +585,62 @@ def _acquire_single_instance_mutex(name: str = "Local\\WhisperFlowSingleInstance
     return int(handle)
 
 
+def _signal_existing_instance(server_name: str = _IPC_SERVER_NAME) -> bool:
+    """Ask an already-running WhisperLM instance to bring its Hub window to front."""
+    sock = QLocalSocket()
+    sock.connectToServer(server_name)
+    if not sock.waitForConnected(800):
+        return False
+    sock.write(b"activate\n")
+    sock.flush()
+    sock.waitForBytesWritten(500)
+    sock.disconnectFromServer()
+    return True
+
+
+def _start_ipc_server(on_activate: object, server_name: str = _IPC_SERVER_NAME) -> QLocalServer:
+    QLocalServer.removeServer(server_name)
+    server = QLocalServer()
+    server.listen(server_name)
+
+    def _on_conn() -> None:
+        while server.hasPendingConnections():
+            conn = server.nextPendingConnection()
+            if conn is None:
+                continue
+            conn.waitForReadyRead(300)
+            conn.close()
+            conn.deleteLater()
+            if callable(on_activate):
+                on_activate()
+
+    server.newConnection.connect(_on_conn)
+    return server
+
+
 def main() -> int:
-    """Launch the Whisper Flow Windows tray application."""
-    mutex = _acquire_single_instance_mutex()
-    if mutex is None:
-        return 0
-
-    # Ensure relative paths work regardless of current working directory.
-    project_root = Path(__file__).resolve().parents[2]
-    os.chdir(project_root)
-
+    """Launch the WhisperLM Windows tray application."""
     qt_app = QApplication(sys.argv)
     qt_app.setQuitOnLastWindowClosed(False)
 
-    config = AppConfig.load(project_root / "config.json")
-    controller = WhisperFlowApp(config=config, qt_app=qt_app)
-    controller.start()
-    return qt_app.exec()
+    mutex = _acquire_single_instance_mutex()
+    if mutex is None:
+        _signal_existing_instance()
+        return 0
+
+    project_root = get_project_root()
+    os.chdir(project_root)
+    _configure_logging(project_root / "logs")
+    _logger.info("Starting WhisperLM from %s", project_root)
+
+    config_path = project_root / "config.json"
+    is_fresh_install = not config_path.exists()
+    config = AppConfig.load(config_path)
+    controller = WhisperLMApp(config=config, qt_app=qt_app)
+    ipc_server = _start_ipc_server(lambda: controller.window.open_page("home"))
+    controller._ipc_server = ipc_server  # keep alive on controller
+    controller.start(open_hub_on_start=is_fresh_install)
+    try:
+        return qt_app.exec()
+    finally:
+        ipc_server.close()

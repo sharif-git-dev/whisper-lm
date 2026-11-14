@@ -1,13 +1,13 @@
 """Tests for LLM cleanup prompting and response parsing."""
 
-from whisper_flow.cleanup import (
+from whisper_lm.cleanup import (
     LlmCleanupClient,
     build_cleanup_system_prompt,
     extract_transcript_only,
     split_transcript_chunks,
 )
-from whisper_flow.config import AppConfig
-from whisper_flow.injector import WindowContext
+from whisper_lm.config import AppConfig
+from whisper_lm.injector import WindowContext
 
 
 def test_extract_transcript_only_strips_wrapping_artifacts() -> None:
@@ -62,8 +62,8 @@ def test_split_transcript_chunks_respects_bound_and_cleans() -> None:
 
 def test_clean_meeting_transcript_preserves_speaker_turns(monkeypatch) -> None:
     import httpx
-    from whisper_flow.cleanup import LlmCleanupClient
-    from whisper_flow.config import AppConfig
+    from whisper_lm.cleanup import LlmCleanupClient
+    from whisper_lm.config import AppConfig
 
     raw = "[00:04] You: um let's ship it\n\n[00:12] Speaker 1: uh sounds good"
 
@@ -86,8 +86,8 @@ def test_clean_meeting_transcript_preserves_speaker_turns(monkeypatch) -> None:
 
 def test_clean_meeting_transcript_falls_back_if_llm_drops_speakers(monkeypatch) -> None:
     import httpx
-    from whisper_flow.cleanup import LlmCleanupClient
-    from whisper_flow.config import AppConfig
+    from whisper_lm.cleanup import LlmCleanupClient
+    from whisper_lm.config import AppConfig
 
     raw = "[00:04] You: let's ship it\n\n[00:12] Speaker 1: sounds good"
 
@@ -109,8 +109,8 @@ def test_clean_meeting_transcript_falls_back_if_llm_drops_speakers(monkeypatch) 
 
 def test_summarize_meeting_transcript_single_and_map_reduce(monkeypatch) -> None:
     import httpx
-    from whisper_flow.cleanup import LlmCleanupClient, format_clean_summary
-    from whisper_flow.config import AppConfig
+    from whisper_lm.cleanup import LlmCleanupClient, format_clean_summary
+    from whisper_lm.config import AppConfig
 
     assert format_clean_summary("<think>hmm</think>\n## Overview\n- Synced on v2.") == "Overview\n• Synced on v2."
 

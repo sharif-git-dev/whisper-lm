@@ -6,8 +6,8 @@ import io
 from pathlib import Path
 import zipfile
 
-from whisper_flow import bootstrap
-from whisper_flow.config import AppConfig
+from whisper_lm import bootstrap
+from whisper_lm.config import AppConfig
 
 
 def _make_fake_zip_bytes(filename: str, payload: bytes) -> bytes:
