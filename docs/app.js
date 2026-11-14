@@ -2,7 +2,8 @@
   const REPO_OWNER = "sharif-git-dev";
   const REPO_NAME = "whisper-lm";
   const RELEASE_FALLBACK_URL = `https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/latest`;
-  const ASSET_DIRECT_URL = `https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/download/v0.1.0/WhisperLM-Windows-x64.zip`;
+  const ASSET_DIRECT_URL = `https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/download/v0.1.0/WhisperLM-Setup.exe`;
+  const PORTABLE_DIRECT_URL = `https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/download/v0.1.0/WhisperLM-Windows-x64.zip`;
 
   // 1. WebAudio tactile Wispr-style "pop" sound cue (mirrors sound.py synthesis cleanly)
   let audioCtx = null;
@@ -316,11 +317,13 @@
     });
   }
 
-  // 10. Dynamic Latest GitHub Release Lookup (populates live zip size + version cleanly)
+  // 10. Dynamic Latest GitHub Release Lookup (populates live installer size + version cleanly)
   async function hydrateReleaseLinks() {
     const primaryLinks = document.querySelectorAll("[data-download-cta]");
+    const portableLinks = document.querySelectorAll("[data-portable-cta]");
     const metaEl = document.getElementById("releaseLiveMeta");
     primaryLinks.forEach((a) => (a.href = ASSET_DIRECT_URL));
+    portableLinks.forEach((a) => (a.href = PORTABLE_DIRECT_URL));
 
     try {
       const res = await fetch(`https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/releases/latest`, {
@@ -328,13 +331,21 @@
       });
       if (!res.ok) throw new Error("Release not fetched");
       const release = await res.json();
-      const zipAsset = (release.assets || []).find((item) => item.name && item.name.endsWith(".zip"));
-      const targetUrl = zipAsset ? zipAsset.browser_download_url : release.html_url || RELEASE_FALLBACK_URL;
+      const assets = release.assets || [];
+      const exeAsset = assets.find((item) => item.name && item.name.endsWith(".exe"));
+      const zipAsset = assets.find((item) => item.name && item.name.endsWith(".zip"));
+      const primaryAsset = exeAsset || zipAsset;
+      const targetUrl = primaryAsset ? primaryAsset.browser_download_url : release.html_url || RELEASE_FALLBACK_URL;
       primaryLinks.forEach((a) => (a.href = targetUrl));
+      if (zipAsset) {
+        portableLinks.forEach((a) => (a.href = zipAsset.browser_download_url));
+      }
 
-      if (metaEl && zipAsset) {
-        const sizeMb = (zipAsset.size / (1024 * 1024)).toFixed(1);
-        metaEl.textContent = `${release.tag_name} · Portable x64 Zip (${sizeMb} MB) · ${zipAsset.download_count} downloads`;
+      if (metaEl && primaryAsset) {
+        const sizeMb = (primaryAsset.size / (1024 * 1024)).toFixed(1);
+        const kindLabel = exeAsset ? "Windows x64 Installer (.exe)" : "Portable x64 Zip";
+        const totalDownloads = (exeAsset ? exeAsset.download_count : 0) + (zipAsset ? zipAsset.download_count : 0);
+        metaEl.textContent = `${release.tag_name} · ${kindLabel} (${sizeMb} MB) · ${totalDownloads} downloads`;
       }
     } catch (_) {
       // Keeps valid fallback direct download link cleanly

@@ -16,8 +16,8 @@ Private, GPU-accelerated Windows voice dictation, automatic meeting recording, m
 
 ## Quick Install
 
-### Option 1: Portable Windows App
-Download `WhisperLM-Windows-x64.zip` from the [Releases page](https://github.com/sharif-git-dev/whisper-lm/releases/latest), unzip anywhere, and run `WhisperLM.exe`. On first launch, WhisperLM opens automatically and downloads required AI models into `models/`.
+### Option 1: Windows Installer (.exe) & Portable App
+Download **`WhisperLM-Setup.exe`** from the [Releases page](https://github.com/sharif-git-dev/whisper-lm/releases/latest) and run it directly—no zip extraction or Python needed (or grab **`WhisperLM-Windows-x64.zip`** if you prefer a portable folder). On first launch, WhisperLM opens automatically and downloads required AI models into `models/`.
 
 ### Option 2: Run from Source
 ```powershell

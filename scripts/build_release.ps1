@@ -107,3 +107,27 @@ Write-Host "Creating compressed release archive $ZipPath..."
 Compress-Archive -Path "$AppDist\*" -DestinationPath $ZipPath -CompressionLevel Optimal
 $SizeMB = [math]::Round((Get-Item $ZipPath).Length / 1MB, 1)
 Write-Host "Built $ZipPath ($SizeMB MB)"
+
+$IsccCandidates = @(
+    "${env:LOCALAPPDATA}\Programs\Inno Setup 6\ISCC.exe",
+    "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
+    "${env:ProgramFiles}\Inno Setup 6\ISCC.exe"
+)
+$Iscc = $IsccCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+if (-not $Iscc) {
+    $cmd = Get-Command iscc -ErrorAction SilentlyContinue
+    if ($cmd) { $Iscc = $cmd.Source }
+}
+$IssFile = Join-Path $PSScriptRoot "installer.iss"
+if ($Iscc -and (Test-Path $IssFile)) {
+    Write-Host "Building standalone Windows installer with Inno Setup..."
+    & $Iscc "/DMyAppVersion=$Version" $IssFile
+    if ($LASTEXITCODE -ne 0) {
+        throw "Inno Setup compilation failed with exit code $LASTEXITCODE"
+    }
+    $SetupPath = Join-Path $ReleaseDir "WhisperLM-Setup.exe"
+    $SetupMB = [math]::Round((Get-Item $SetupPath).Length / 1MB, 1)
+    Write-Host "Built $SetupPath ($SetupMB MB)"
+} else {
+    Write-Warning "Inno Setup (ISCC.exe) not found; skipping WhisperLM-Setup.exe build."
+}
