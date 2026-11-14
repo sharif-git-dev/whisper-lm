@@ -11,7 +11,8 @@ Private, GPU-accelerated Windows voice dictation, automatic meeting recording, m
 - **English Accuracy + Arabic On/Off Switch:** Runs `Whisper large-v3-turbo` with beam search (`--beam-size 5`), anti-aliased 16 kHz microphone conditioning, and a 1-click **Arabic + English** toggle in **Settings** and the system tray so pure English mode stays locked to English while bilingual mode supports mixed Arabic + English.
 - **Automatic Meeting Detection & Dual-Stream Capture:** Detects Google Meet, Zoom, Microsoft Teams, Discord, WhatsApp, Webex, and Slack calls automatically, recording both your microphone and system audio via WASAPI loopback.
 - **Multi-Speaker Attribution & Local Summaries:** Separates `You` vs remote speakers (`Speaker 1`, `Speaker 2`, ...) and summarizes full transcripts locally into structured **Overview**, **Key Points**, **Decisions**, and **Action Items** via `Qwen3-4B-Instruct-2507`.
-- **100% Local History & Privacy:** Everything—audio capture, speech recognition, AI formatting, and time-organized archives (`Today`, `This Week`, `This Month`, `All`)—stays on your machine (`127.0.0.1`).
+- **100% Local History + Seamless BYO Cloud Backup:** Everything—audio capture, speech recognition, AI formatting, and time-organized archives (`Today`, `This Week`, `This Month`, `All`)—stays private on your machine (`%APPDATA%\WhisperLM`) and automatically mirrors conflict-free to your own **Google Drive**, **OneDrive**, **Dropbox**, **Firebase**, or **GitHub Private Gist** with zero WhisperLM accounts required.
+- **Automatic In-App Updates:** Checks GitHub Releases cleanly and prompts when a new version is ready (`Update Now` downloads, upgrades cleanly keeping your data/models intact, and relaunches).
 - **Launch at Windows Startup:** Starts silently in the system tray when you sign in to Windows (toggleable anytime from **Settings** or the tray menu).
 
 ## Quick Install

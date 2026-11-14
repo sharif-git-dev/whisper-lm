@@ -5,7 +5,7 @@ import sys
 
 import pytest
 
-from whisper_lm.config import AppConfig, get_project_root
+from whisper_lm.config import AppConfig, get_project_root, migrate_legacy_data
 
 
 def test_config_roundtrip(tmp_path: Path) -> None:
@@ -75,3 +75,23 @@ def test_get_project_root_frozen_and_source(monkeypatch: pytest.MonkeyPatch, tmp
     monkeypatch.delattr(sys, "frozen", raising=False)
     root = get_project_root()
     assert (root / "src" / "whisper_lm" / "config.py").exists()
+
+
+def test_migrate_legacy_data_preserves_existing_and_is_idempotent(tmp_path: Path) -> None:
+    proj = tmp_path / "project"
+    data = tmp_path / "appdata"
+    (proj / "history").mkdir(parents=True)
+    (proj / "meetings").mkdir(parents=True)
+    (proj / "config.json").write_text('{"hotkey_hold": "f9"}', encoding="utf-8")
+    (proj / "history" / "dictations.jsonl").write_text('{"id": "h1"}\n', encoding="utf-8")
+    (proj / "meetings" / "m1.json").write_text('{"id": "m1"}', encoding="utf-8")
+
+    assert migrate_legacy_data(proj, data) is True
+    assert (data / "config.json").read_text(encoding="utf-8") == '{"hotkey_hold": "f9"}'
+    assert (data / "history" / "dictations.jsonl").exists()
+    assert (data / "meetings" / "m1.json").exists()
+
+    # Does not overwrite user edits already saved in persistent data_root
+    (data / "config.json").write_text('{"hotkey_hold": "ctrl+win"}', encoding="utf-8")
+    assert migrate_legacy_data(proj, data) is False
+    assert (data / "config.json").read_text(encoding="utf-8") == '{"hotkey_hold": "ctrl+win"}'

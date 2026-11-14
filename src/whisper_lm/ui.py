@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
     QAbstractButton,
     QApplication,
     QComboBox,
+    QFileDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -48,6 +49,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from whisper_lm import __version__
 from whisper_lm.audio import AudioRecorder, list_input_devices
 from whisper_lm.config import AppConfig
 from whisper_lm.history import (
@@ -58,6 +60,8 @@ from whisper_lm.history import (
 )
 from whisper_lm.hotkeys import HOLD_HOTKEY_PRESETS, TOGGLE_HOTKEY_PRESETS
 from whisper_lm.meetings import MeetingRecord, format_duration
+from whisper_lm.sync import describe_cloud_target, detect_cloud_drives, resolve_auto_backup_drive
+from whisper_lm.updater import UpdateInfo
 
 try:
     user32 = ctypes.WinDLL("user32", use_last_error=True)
@@ -1171,6 +1175,9 @@ class FlowHubWindow(QMainWindow):
     meeting_state_changed = Signal(str, str)  # ("recording" | "cleaning" | "summarizing" | "idle", app_name)
     runtime_status_changed = Signal(str, int)  # (status_message, progress_percent; -1 hides setup bar)
     open_page_requested = Signal(str)
+    update_available = Signal(object, bool)  # (UpdateInfo, prompt_user)
+    cloud_status_changed = Signal(str)
+    quit_requested = Signal()
 
     def __init__(
         self,
@@ -1183,6 +1190,9 @@ class FlowHubWindow(QMainWindow):
         on_toggle_meeting_auto: Callable[[bool], None] | None = None,
         on_summarize_meeting: Callable[[str], None] | None = None,
         on_clear_history: Callable[[], None] | None = None,
+        on_check_updates: Callable[[], None] | None = None,
+        on_install_update: Callable[[Any], None] | None = None,
+        on_skip_update: Callable[[str], None] | None = None,
     ) -> None:
         super().__init__()
         self.config = config
@@ -1194,6 +1204,9 @@ class FlowHubWindow(QMainWindow):
         self._on_toggle_meeting_auto = on_toggle_meeting_auto or (lambda _b: None)
         self._on_summarize_meeting = on_summarize_meeting or (lambda _mid: None)
         self._on_clear_history = on_clear_history or (lambda: None)
+        self._on_check_updates = on_check_updates or (lambda: None)
+        self._on_install_update = on_install_update or (lambda _u: None)
+        self._on_skip_update = on_skip_update or (lambda _v: None)
 
         self._history: list[HistoryEntry] = []
         self._history_time_filter = "all"
@@ -1206,6 +1219,8 @@ class FlowHubWindow(QMainWindow):
         self._meeting_view_mode = "cleaned"  # "summary" | "cleaned" | "raw"
         self._meeting_view_explicit: str | None = None
         self._is_meeting_recording = False
+        self._pending_update: UpdateInfo | None = None
+        self._update_prompt_shown = False
 
         self._test_recorder: AudioRecorder | None = None
         self._test_timer: QTimer | None = None
@@ -1223,6 +1238,8 @@ class FlowHubWindow(QMainWindow):
         self.meeting_state_changed.connect(self._set_meeting_status)
         self.runtime_status_changed.connect(self._set_runtime_status)
         self.open_page_requested.connect(self.open_page)
+        self.update_available.connect(self._on_update_available)
+        self.cloud_status_changed.connect(self._set_cloud_status)
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
@@ -1576,6 +1593,34 @@ class FlowHubWindow(QMainWindow):
         sb.addWidget(self._setup_progress)
         self._setup_banner.hide()
         outer.addWidget(self._setup_banner)
+
+        # In-app update available card (hidden unless a newer release is found)
+        self._update_banner = QFrame()
+        self._update_banner.setObjectName("Card")
+        self._update_banner.setStyleSheet(
+            f"QFrame#Card {{ background-color: #14141C; border: 1px solid rgba(123, 139, 255, 0.45); border-radius: 12px; }}"
+        )
+        ub = QHBoxLayout(self._update_banner)
+        ub.setContentsMargins(16, 12, 16, 12)
+        ub.setSpacing(10)
+        ub_dot = QLabel("✦")
+        ub_dot.setStyleSheet(f"color: {_ACCENT_INDIGO}; font-size: 13px;")
+        self._update_banner_lbl = QLabel("A newer version of WhisperLM is available.")
+        self._update_banner_lbl.setStyleSheet(f"color: {_TEXT_PRIMARY}; font-size: 12.5px; font-weight: 500;")
+        self._update_now_btn = QPushButton("Update Now")
+        self._update_now_btn.setObjectName("PrimaryPillBtn")
+        self._update_now_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._update_now_btn.clicked.connect(self._trigger_pending_update)
+        later_btn = QPushButton("Later")
+        later_btn.setObjectName("GhostPillBtn")
+        later_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        later_btn.clicked.connect(self._update_banner.hide)
+        ub.addWidget(ub_dot)
+        ub.addWidget(self._update_banner_lbl, 1)
+        ub.addWidget(later_btn)
+        ub.addWidget(self._update_now_btn)
+        self._update_banner.hide()
+        outer.addWidget(self._update_banner)
 
         metrics = QHBoxLayout()
         metrics.setSpacing(12)
@@ -2016,6 +2061,90 @@ class FlowHubWindow(QMainWindow):
         c4.addWidget(self._setting_row("Meeting Summaries", "Summarize key points, decisions, and action items after each meeting", self._meeting_summary_switch))
         cl.addWidget(card4)
 
+        # 5. Backup & Updates
+        sec5 = QLabel("Backup & Updates")
+        sec5.setObjectName("SectionTitle")
+        cl.addWidget(sec5)
+
+        card5 = QFrame()
+        card5.setObjectName("Card")
+        c5 = QVBoxLayout(card5)
+        c5.setContentsMargins(0, 0, 0, 0)
+        c5.setSpacing(0)
+
+        self._cloud_combo = QComboBox()
+        self._cloud_combo.setFixedWidth(252)
+        self._cloud_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self._populate_cloud_combo()
+        self._cloud_combo.currentIndexChanged.connect(self._on_cloud_selection_changed)
+
+        self._cloud_row = self._setting_row(
+            "Cloud Backup",
+            "Automatically backs up dictations, meetings, and dictionary cleanly across installs",
+            self._cloud_combo,
+        )
+        self._cloud_desc_lbl = self._cloud_row.findChild(QLabel, "SettingDesc")
+        c5.addWidget(self._cloud_row)
+
+        # Conditional 1-line destination / token inputs (hidden unless Custom Folder / Firebase / GitHub)
+        folder_wrap = QWidget()
+        fw = QHBoxLayout(folder_wrap)
+        fw.setContentsMargins(0, 0, 0, 0)
+        fw.setSpacing(8)
+        self._cloud_folder_input = QLineEdit(self.config.cloud_backup_folder)
+        self._cloud_folder_input.setPlaceholderText("Select any synced folder...")
+        self._cloud_folder_input.setFixedWidth(210)
+        browse_btn = QPushButton("Browse")
+        browse_btn.setObjectName("GhostPillBtn")
+        browse_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        browse_btn.clicked.connect(self._browse_cloud_folder)
+        fw.addWidget(self._cloud_folder_input)
+        fw.addWidget(browse_btn)
+        self._cloud_folder_row = self._setting_row("Backup Folder", "Any folder synced by Google Drive, OneDrive, or Dropbox", folder_wrap)
+        c5.addWidget(self._cloud_folder_row)
+
+        fb_wrap = QWidget()
+        fbw = QVBoxLayout(fb_wrap)
+        fbw.setContentsMargins(0, 0, 0, 0)
+        fbw.setSpacing(6)
+        self._firebase_url_input = QLineEdit(self.config.cloud_firebase_url)
+        self._firebase_url_input.setPlaceholderText("https://your-project-default-rtdb.firebaseio.com")
+        self._firebase_url_input.setFixedWidth(260)
+        self._firebase_token_input = QLineEdit(self.config.cloud_firebase_token)
+        self._firebase_token_input.setPlaceholderText("Optional auth secret / token")
+        self._firebase_token_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self._firebase_token_input.setFixedWidth(260)
+        fbw.addWidget(self._firebase_url_input)
+        fbw.addWidget(self._firebase_token_input)
+        self._cloud_firebase_row = self._setting_row("Firebase Database", "Syncs JSON snapshots directly to your private Firebase RTDB", fb_wrap)
+        c5.addWidget(self._cloud_firebase_row)
+
+        self._github_token_input = QLineEdit(self.config.cloud_github_token)
+        self._github_token_input.setPlaceholderText("GitHub token (gist scope)")
+        self._github_token_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self._github_token_input.setFixedWidth(252)
+        self._cloud_github_row = self._setting_row("GitHub Token", "Stores encrypted-free private Gist backups in your own GitHub account", self._github_token_input)
+        c5.addWidget(self._cloud_github_row)
+
+        c5.addWidget(self._divider())
+        self._auto_update_switch = _ToggleSwitch(self.config.auto_check_updates)
+        c5.addWidget(self._setting_row("Automatic Update Checks", "Ask before installing newer WhisperLM releases when available", self._auto_update_switch))
+
+        c5.addWidget(self._divider())
+        self._update_btn = QPushButton("Check for Updates")
+        self._update_btn.setObjectName("GhostPillBtn")
+        self._update_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._update_btn.clicked.connect(self._on_update_button_clicked)
+        self._update_row = self._setting_row(
+            "App Updates",
+            f"Installed version v{__version__}",
+            self._update_btn,
+        )
+        self._update_desc_lbl = self._update_row.findChild(QLabel, "SettingDesc")
+        c5.addWidget(self._update_row)
+
+        cl.addWidget(card5)
+
         cl.addStretch(1)
         scroll.setWidget(inner)
         outer.addWidget(scroll, 1)
@@ -2058,7 +2187,111 @@ class FlowHubWindow(QMainWindow):
         self._meeting_sys_audio_switch.setChecked(cfg.meeting_capture_system_audio)
         self._meeting_cleanup_switch.setChecked(cfg.meeting_cleanup_enabled)
         self._meeting_summary_switch.setChecked(cfg.meeting_summary_enabled)
+
+        self._auto_update_switch.setChecked(cfg.auto_check_updates)
+        self._cloud_folder_input.setText(cfg.cloud_backup_folder)
+        self._firebase_url_input.setText(cfg.cloud_firebase_url)
+        self._firebase_token_input.setText(cfg.cloud_firebase_token)
+        self._github_token_input.setText(cfg.cloud_github_token)
+        self._sync_cloud_combo_selection(cfg)
+        self._update_cloud_detail_visibility()
+        self._set_cloud_status(describe_cloud_target(cfg))
         self._rebuild_dictionary_list()
+
+    def _populate_cloud_combo(self) -> None:
+        self._cloud_combo.blockSignals(True)
+        self._cloud_combo.clear()
+        drives = detect_cloud_drives()
+        auto_drive = resolve_auto_backup_drive(drives)
+        auto_lbl = f"Auto ({auto_drive.display_name})" if auto_drive else "Auto (Local only)"
+        self._cloud_combo.addItem(auto_lbl, "auto")
+        for drive in drives:
+            self._cloud_combo.addItem(drive.display_name, f"folder::{drive.backup_path}")
+        self._cloud_combo.addItem("Choose Custom Folder...", "folder_custom")
+        self._cloud_combo.addItem("Own Firebase Database", "firebase")
+        self._cloud_combo.addItem("GitHub Private Gist", "github")
+        self._cloud_combo.addItem("Off (This PC only)", "off")
+        self._cloud_combo.blockSignals(False)
+
+    def _sync_cloud_combo_selection(self, cfg: AppConfig) -> None:
+        mode = (cfg.cloud_backup_mode or "auto").lower()
+        target: str = mode
+        if mode == "folder":
+            folder = cfg.cloud_backup_folder.strip()
+            candidate = f"folder::{folder}"
+            target = candidate if self._cloud_combo.findData(candidate) >= 0 else "folder_custom"
+        self._cloud_combo.blockSignals(True)
+        self._set_combo_data(self._cloud_combo, target)
+        self._cloud_combo.blockSignals(False)
+
+    def _update_cloud_detail_visibility(self) -> None:
+        choice = str(self._cloud_combo.currentData() or "auto")
+        self._cloud_folder_row.setVisible(choice == "folder_custom")
+        self._cloud_firebase_row.setVisible(choice == "firebase")
+        self._cloud_github_row.setVisible(choice == "github")
+
+    def _on_cloud_selection_changed(self, _index: int) -> None:
+        choice = str(self._cloud_combo.currentData() or "auto")
+        self._update_cloud_detail_visibility()
+        if choice == "folder_custom" and not self._cloud_folder_input.text().strip():
+            self._browse_cloud_folder()
+
+    def _browse_cloud_folder(self) -> None:
+        chosen = QFileDialog.getExistingDirectory(self, "Select Cloud Sync Folder")
+        if chosen:
+            self._cloud_folder_input.setText(chosen)
+
+    def _set_cloud_status(self, message: str) -> None:
+        if getattr(self, "_cloud_desc_lbl", None) is not None and message:
+            self._cloud_desc_lbl.setText(f"{message} · Keeps dictations, meetings, and dictionary backed up cleanly")
+
+    def _on_update_available(self, info: UpdateInfo, prompt_user: bool) -> None:
+        self._pending_update = info
+        self._update_banner_lbl.setText(f"WhisperLM v{info.version} is available — Would you like to update?")
+        self._update_banner.show()
+        self._update_btn.setText(f"Update to v{info.version}")
+        self._update_btn.setObjectName("PrimaryPillBtn")
+        self._update_btn.style().unpolish(self._update_btn)
+        self._update_btn.style().polish(self._update_btn)
+        if self._update_desc_lbl is not None:
+            self._update_desc_lbl.setText(f"v{info.version} ready (installed: v{__version__})")
+
+        if not prompt_user or self._update_prompt_shown:
+            return
+        self._update_prompt_shown = True
+
+        box = QMessageBox(self)
+        box.setWindowTitle("WhisperLM Update Available")
+        box.setIcon(QMessageBox.Icon.Question)
+        box.setText(f"WhisperLM v{info.version} is available (installed: v{__version__}).\n\nWould you like to update now?")
+        if info.release_notes:
+            box.setInformativeText(info.release_notes[:320])
+        update_btn = box.addButton("Update Now", QMessageBox.ButtonRole.AcceptRole)
+        later_btn = box.addButton("Later", QMessageBox.ButtonRole.RejectRole)
+        skip_btn = box.addButton("Skip Version", QMessageBox.ButtonRole.DestructiveRole)
+        box.setDefaultButton(update_btn)
+        box.exec()
+
+        clicked = box.clickedButton()
+        if clicked == update_btn:
+            self._trigger_pending_update()
+        elif clicked == skip_btn:
+            self._update_banner.hide()
+            self._on_skip_update(info.version)
+        else:
+            del later_btn
+
+    def _trigger_pending_update(self) -> None:
+        if self._pending_update is not None:
+            self._on_install_update(self._pending_update)
+
+    def _on_update_button_clicked(self) -> None:
+        if self._pending_update is not None:
+            self._trigger_pending_update()
+        else:
+            if self._update_desc_lbl is not None:
+                self._update_desc_lbl.setText(f"Checking for updates... (installed: v{__version__})")
+            self._on_check_updates()
 
     def _set_runtime_status(self, message: str, percent: int) -> None:
         self._sidebar_status_lbl.setText(message or "Ready")
@@ -2487,6 +2720,20 @@ class FlowHubWindow(QMainWindow):
         self._test_timer.start()
 
     def _save_settings(self) -> None:
+        cloud_choice = str(self._cloud_combo.currentData() or "auto")
+        if cloud_choice.startswith("folder::"):
+            cloud_mode = "folder"
+            cloud_folder = cloud_choice.split("::", 1)[1]
+        elif cloud_choice == "folder_custom":
+            cloud_mode = "folder"
+            cloud_folder = self._cloud_folder_input.text().strip()
+        elif cloud_choice in {"auto", "firebase", "github", "off"}:
+            cloud_mode = cloud_choice
+            cloud_folder = self._cloud_folder_input.text().strip()
+        else:
+            cloud_mode = "auto"
+            cloud_folder = ""
+
         updated = replace(
             self.config,
             hotkey_hold=str(self._hold_combo.currentData()),
@@ -2503,6 +2750,12 @@ class FlowHubWindow(QMainWindow):
             meeting_capture_system_audio=self._meeting_sys_audio_switch.isChecked(),
             meeting_cleanup_enabled=self._meeting_cleanup_switch.isChecked(),
             meeting_summary_enabled=self._meeting_summary_switch.isChecked(),
+            cloud_backup_mode=cloud_mode,
+            cloud_backup_folder=cloud_folder,
+            cloud_firebase_url=self._firebase_url_input.text().strip(),
+            cloud_firebase_token=self._firebase_token_input.text().strip(),
+            cloud_github_token=self._github_token_input.text().strip(),
+            auto_check_updates=self._auto_update_switch.isChecked(),
         )
         self._on_save_config(updated)
         self.sync_from_config(updated)
@@ -2635,6 +2888,7 @@ class TrayController(QWidget):
 
         self._tray.setContextMenu(self._menu)
         self._tray.activated.connect(self._on_activated)
+        self._tray.messageClicked.connect(lambda: self._window.open_page("home"))
         self._tray.show()
 
         self.status_requested.connect(self.set_status)
@@ -2671,6 +2925,10 @@ class TrayController(QWidget):
         self._status_action.setText(status_text)
         self._tray.setIcon(_build_tray_icon(dot_color))
         self._tray.setToolTip(f"WhisperLM — {status_text}")
+
+    def notify(self, title: str, message: str) -> None:
+        """Display a native Windows tray balloon notification."""
+        self._tray.showMessage(title, message, QSystemTrayIcon.MessageIcon.Information, 6000)
 
     def hide(self) -> None:
         self._tray.hide()

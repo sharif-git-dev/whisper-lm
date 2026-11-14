@@ -20,7 +20,7 @@ from whisper_lm.asr import WhisperServerClient
 from whisper_lm.audio import AudioRecorder, float32_to_wav_bytes, prepare_speech_for_asr
 from whisper_lm.bootstrap import ensure_assets_downloaded, missing_assets
 from whisper_lm.cleanup import LlmCleanupClient
-from whisper_lm.config import AppConfig, get_project_root
+from whisper_lm.config import AppConfig, get_data_root, get_project_root, migrate_legacy_data
 from whisper_lm.history import DictationStore
 from whisper_lm.hotkeys import GlobalHotkeyListener
 from whisper_lm.injector import (
@@ -39,6 +39,7 @@ from whisper_lm.meetings import (
 from whisper_lm.servers import ServerManager
 from whisper_lm.sound import play_activation_sound
 from whisper_lm.startup import sync_windows_startup
+from whisper_lm.sync import CloudSyncManager, SyncResult
 from whisper_lm.ui import (
     FlowHubWindow,
     FlowPillWidget,
@@ -46,6 +47,12 @@ from whisper_lm.ui import (
     MeetingPillWidget,
     TrayController,
     current_timestamp,
+)
+from whisper_lm.updater import (
+    UpdateInfo,
+    apply_update_and_relaunch,
+    check_for_update,
+    download_update,
 )
 from whisper_lm.vad import SileroVAD
 
@@ -55,14 +62,17 @@ _IPC_SERVER_NAME = "WhisperLM_InstanceBus"
 
 
 class WhisperLMApp:
-    """Orchestrates local dictation and automatic meeting recording."""
+    """Orchestrates local dictation, automatic meeting recording, cloud backup, and updates."""
 
-    def __init__(self, config: AppConfig, qt_app: QApplication) -> None:
+    def __init__(self, config: AppConfig, qt_app: QApplication, data_root: Path | None = None) -> None:
         self.config = config
         self.qt_app = qt_app
+        self.data_root = data_root if data_root is not None else get_data_root()
 
         self._lock = threading.Lock()
         self._summary_lock = threading.Lock()
+        self._update_lock = threading.Lock()
+        self._updating = False
         self._summarizing_ids: set[str] = set()
         self._state = "loading"  # loading | idle | recording | processing
         self._record_started_at = 0.0
@@ -71,7 +81,9 @@ class WhisperLMApp:
         self._tap_timer: threading.Timer | None = None
         self._target_context: WindowContext | None = None
 
-        self.history_store = DictationStore(self.config.resolve_path(self.config.history_dir))
+        self.history_store = DictationStore(
+            self.config.resolve_data_path(self.config.history_dir, base_dir=self.data_root)
+        )
         self.hud = FlowPillWidget(
             always_on=self.config.always_on_pill,
             on_toggle_dictate=self._on_toggle_press,
@@ -88,7 +100,10 @@ class WhisperLMApp:
             on_delete_meeting=self._delete_meeting,
             on_toggle_meeting_auto=self._toggle_meeting_auto,
             on_summarize_meeting=self._summarize_meeting,
-            on_clear_history=self.history_store.clear,
+            on_clear_history=self._clear_history,
+            on_check_updates=lambda: self._check_updates_async(interactive=True),
+            on_install_update=self._install_update_async,
+            on_skip_update=self._skip_update_version,
         )
         self.meeting_pill = MeetingPillWidget(
             on_stop_clicked=self._manual_stop_meeting,
@@ -120,7 +135,19 @@ class WhisperLMApp:
             on_toggle=self._on_toggle_press,
         )
 
-        self.meeting_store = MeetingStore(self.config.resolve_path(self.config.meetings_dir))
+        self.meeting_store = MeetingStore(
+            self.config.resolve_data_path(self.config.meetings_dir, base_dir=self.data_root)
+        )
+        self.cloud_sync = CloudSyncManager(
+            config=self.config,
+            history_store=self.history_store,
+            meeting_store=self.meeting_store,
+            data_root=self.data_root,
+            on_config_updated=lambda cfg: cfg.save(self.data_root / "config.json"),
+            on_data_restored=self._refresh_ui_from_stores,
+            on_status=self._on_cloud_sync_status,
+        )
+        self.window.quit_requested.connect(self.shutdown)
         self.meeting_recorder = MeetingRecorderController(
             config=self.config,
             asr=self.asr,
@@ -191,6 +218,9 @@ class WhisperLMApp:
             self.window.runtime_status_changed.emit("Ready", -1)
             label = self.config.hotkey_hold.replace("+", " + ").replace("_", " ").title()
             self.hud.state_requested.emit("done", f"Ready ({label})", 1800)
+            self.cloud_sync.trigger_async()
+            if self.config.auto_check_updates:
+                self._check_updates_async(interactive=False)
         except Exception as exc:
             _logger.exception("WhisperLM startup failed")
             with self._lock:
@@ -370,6 +400,7 @@ class WhisperLMApp:
             )
             self.history_store.append(entry)
             self.window.history_added.emit(entry)
+            self.cloud_sync.trigger_async()
         except Exception:
             _logger.exception("Dictation processing failed")
             self.hud.state_requested.emit("error", "Transcription error", 2000)
@@ -379,8 +410,9 @@ class WhisperLMApp:
             self.tray.status_requested.emit("Ready", "#F5F5F7")
 
     def _apply_new_config(self, new_cfg: AppConfig) -> None:
-        new_cfg.save()
+        new_cfg.save(self.data_root / "config.json")
         self.config = new_cfg
+        self.cloud_sync.update_config(new_cfg)
         self.recorder = self._make_recorder()
         self.meeting_recorder.config = new_cfg
         self.meeting_detector.set_enabled(new_cfg.meeting_auto_detect)
@@ -388,6 +420,7 @@ class WhisperLMApp:
         self.hud.set_always_on(new_cfg.always_on_pill)
         sync_windows_startup(new_cfg.launch_at_startup)
         self.tray.sync_config(new_cfg)
+        self.cloud_sync.trigger_async()
         if (
             new_cfg.llm_cleanup_enabled or new_cfg.meeting_cleanup_enabled or new_cfg.meeting_summary_enabled
         ) and not self.servers.llama_running:
@@ -438,19 +471,100 @@ class WhisperLMApp:
         else:
             self._manual_start_meeting()
 
-    def _toggle_meeting_auto(self, enabled: bool) -> None:
-        self.config.meeting_auto_detect = enabled
-        self.config.save()
-        self.meeting_detector.set_enabled(enabled)
+    def _persist_config(self) -> None:
+        self.config.save(self.data_root / "config.json")
+        self.cloud_sync.update_config(self.config)
         self.tray.sync_config(self.config)
         self.window.sync_from_config(self.config)
+
+    def _toggle_meeting_auto(self, enabled: bool) -> None:
+        self.config.meeting_auto_detect = enabled
+        self.meeting_detector.set_enabled(enabled)
+        self._persist_config()
 
     def _delete_meeting(self, meeting_id: str) -> None:
         active = self.meeting_recorder.current_record
         if active is not None and active.id == meeting_id:
             return
         self.meeting_store.delete(meeting_id)
+        self.cloud_sync.record_deleted_meeting(meeting_id)
+        self.cloud_sync.trigger_async()
         self.window.meetings_updated.emit(self.meeting_store.list_all())
+
+    def _clear_history(self) -> None:
+        for entry in self.history_store.list_all():
+            self.cloud_sync.record_deleted_dictation(entry.id)
+        self.history_store.clear()
+        self.cloud_sync.trigger_async()
+
+    def _refresh_ui_from_stores(self) -> None:
+        self.window.history_loaded.emit(self.history_store.list_all())
+        self.window.meetings_updated.emit(self.meeting_store.list_all())
+
+    def _on_cloud_sync_status(self, result: SyncResult) -> None:
+        if result.ok and result.restored_count > 0:
+            self.window.cloud_status_changed.emit(f"Restored {result.restored_count} items from {result.provider_label}")
+        elif result.detail:
+            self.window.cloud_status_changed.emit(result.detail)
+
+    def _skip_update_version(self, version: str) -> None:
+        self.config.skipped_update_version = version
+        self.config.save(self.data_root / "config.json")
+
+    def _check_updates_async(self, *, interactive: bool = False) -> None:
+        def _worker() -> None:
+            try:
+                info = check_for_update()
+            except Exception as exc:
+                _logger.info("Update check skipped: %s", exc)
+                if interactive:
+                    self.window.cloud_status_changed.emit("Update check unavailable offline")
+                return
+
+            if info is None:
+                if interactive:
+                    self.tray.status_requested.emit("WhisperLM is up to date", "#34D399")
+                    self.window.runtime_status_changed.emit("WhisperLM is up to date", -1)
+                return
+
+            if not interactive and info.version == self.config.skipped_update_version:
+                self.window.update_available.emit(info, False)
+                return
+
+            self.tray.notify(
+                f"WhisperLM v{info.version} Available",
+                "Click to update WhisperLM now.",
+            )
+            self.window.update_available.emit(info, True)
+
+        threading.Thread(target=_worker, name="check-updates", daemon=True).start()
+
+    def _install_update_async(self, info: UpdateInfo) -> None:
+        with self._update_lock:
+            if self._updating:
+                return
+            self._updating = True
+
+        def _worker() -> None:
+            try:
+                self.window.open_page_requested.emit("home")
+
+                def _on_prog(pct: int, msg: str) -> None:
+                    self.window.runtime_status_changed.emit(msg, pct)
+                    self.hud.state_requested.emit("loading", msg, 0)
+
+                installer = download_update(info, on_progress=_on_prog)
+                self.window.runtime_status_changed.emit(f"Installing WhisperLM v{info.version}...", 100)
+                apply_update_and_relaunch(installer)
+                self.window.quit_requested.emit()
+            except Exception as exc:
+                _logger.exception("Auto-update failed")
+                self.window.runtime_status_changed.emit(f"Update failed: {exc}", 0)
+            finally:
+                with self._update_lock:
+                    self._updating = False
+
+        threading.Thread(target=_worker, name="install-update", daemon=True).start()
 
     def _summarize_meeting(self, meeting_id: str) -> None:
         if not meeting_id:
@@ -499,43 +613,35 @@ class WhisperLMApp:
         self.meeting_pill.state_changed.emit(ui_state, label)
         self.tray.meeting_status_changed.emit(record.status == "recording")
         self.hud.recording_state_changed.emit(record.status == "recording")
+        if record.status in {"completed", "error"}:
+            self.cloud_sync.trigger_async()
 
     def _toggle_always_on_pill(self, enabled: bool) -> None:
         self.config.always_on_pill = enabled
-        self.config.save()
         self.hud.set_always_on(enabled)
-        self.tray.sync_config(self.config)
-        self.window.sync_from_config(self.config)
+        self._persist_config()
 
     def _toggle_launch_at_startup(self, enabled: bool) -> None:
         self.config.launch_at_startup = enabled
-        self.config.save()
         sync_windows_startup(enabled)
-        self.tray.sync_config(self.config)
-        self.window.sync_from_config(self.config)
+        self._persist_config()
 
     def _toggle_cleanup(self, enabled: bool) -> None:
         self.config.llm_cleanup_enabled = enabled
-        self.config.save()
-        self.tray.sync_config(self.config)
-        self.window.sync_from_config(self.config)
+        self._persist_config()
         if enabled and not self.servers.llama_running:
             threading.Thread(target=self.servers.ensure_llama_started, daemon=True).start()
 
     def _toggle_arabic_mode(self, enabled: bool) -> None:
         self.config.whisper_language = "auto" if enabled else "en"
-        self.config.save()
-        self.tray.sync_config(self.config)
-        self.window.sync_from_config(self.config)
+        self._persist_config()
         label = "Arabic + English" if enabled else "English Only"
         self.hud.state_requested.emit("done", label, 1400)
 
     def _change_hold_hotkey(self, hold_key: str) -> None:
         self.config.hotkey_hold = hold_key
-        self.config.save()
         self.hotkeys.update_hotkeys(self.config.hotkey_hold, self.config.hotkey_toggle)
-        self.tray.sync_config(self.config)
-        self.window.sync_from_config(self.config)
+        self._persist_config()
         label = hold_key.replace("+", " + ").replace("_", " ").title()
         self.hud.state_requested.emit("done", f"Hold: {label}", 1500)
 
@@ -639,16 +745,18 @@ def main() -> int:
         return 0
 
     project_root = get_project_root()
+    data_root = get_data_root()
+    migrate_legacy_data(project_root, data_root)
     os.chdir(project_root)
     _configure_logging(project_root / "logs")
-    _logger.info("Starting WhisperLM from %s", project_root)
+    _logger.info("Starting WhisperLM from %s (data: %s)", project_root, data_root)
 
-    config_path = project_root / "config.json"
+    config_path = data_root / "config.json"
     launched_at_startup = "--startup" in sys.argv[1:]
     is_fresh_install = not config_path.exists()
     config = AppConfig.load(config_path)
     sync_windows_startup(config.launch_at_startup)
-    controller = WhisperLMApp(config=config, qt_app=qt_app)
+    controller = WhisperLMApp(config=config, qt_app=qt_app, data_root=data_root)
     ipc_server = _start_ipc_server(lambda: controller.window.open_page("home"))
     controller._ipc_server = ipc_server  # keep alive on controller
     controller.start(open_hub_on_start=is_fresh_install and not launched_at_startup)

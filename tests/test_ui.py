@@ -465,3 +465,48 @@ def test_launch_at_startup_setting_and_tray_sync() -> None:
     app.processEvents()
     tray.hide()
     hub.close()
+
+
+def test_hub_update_banner_and_cloud_backup_settings() -> None:
+    from whisper_lm.updater import UpdateInfo
+
+    app = QApplication.instance() or QApplication([])
+    saved_cfgs: list[AppConfig] = []
+    installed_updates: list[UpdateInfo] = []
+    hub = FlowHubWindow(
+        config=AppConfig(cloud_backup_mode="auto"),
+        on_save_config=saved_cfgs.append,
+        on_copy_text=lambda _t: None,
+        on_install_update=installed_updates.append,
+    )
+
+    assert not hub._update_banner.isVisibleTo(hub)
+    assert not hub._cloud_folder_row.isVisibleTo(hub)
+    assert not hub._cloud_firebase_row.isVisibleTo(hub)
+    assert not hub._cloud_github_row.isVisibleTo(hub)
+
+    info = UpdateInfo(
+        version="0.9.0",
+        tag_name="v0.9.0",
+        release_notes="Better sync",
+        asset_name="WhisperLM-Setup.exe",
+        download_url="https://example.invalid/WhisperLM-Setup.exe",
+        size_bytes=80_000_000,
+    )
+    hub.update_available.emit(info, False)
+    app.processEvents()
+    assert hub._update_banner.isVisibleTo(hub)
+    assert "0.9.0" in hub._update_banner_lbl.text()
+    hub._update_now_btn.click()
+    assert installed_updates == [info]
+
+    # Switching dropdown reveals only the matching BYO input row
+    hub._set_combo_data(hub._cloud_combo, "firebase")
+    assert not hub._cloud_firebase_row.isHidden()
+    assert hub._cloud_github_row.isHidden()
+    hub._firebase_url_input.setText("https://demo-db.firebaseio.com")
+    hub._save_settings()
+    assert saved_cfgs[-1].cloud_backup_mode == "firebase"
+    assert saved_cfgs[-1].cloud_firebase_url == "https://demo-db.firebaseio.com"
+
+    hub.close()

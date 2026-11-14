@@ -122,6 +122,12 @@ class DictationStore:
             items.sort(key=lambda item: (item.created_at, item.id), reverse=True)
             return items
 
+    def replace_all(self, entries: list[HistoryEntry]) -> None:
+        """Replace stored dictations atomically with merged entries ordered newest-first."""
+        ordered = sorted(entries, key=lambda item: (item.created_at, item.id), reverse=True)
+        with self._lock:
+            self._write_unlocked(ordered)
+
     def delete(self, entry_id: str) -> None:
         with self._lock:
             if not self.file_path.exists():
