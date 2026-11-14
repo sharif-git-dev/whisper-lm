@@ -71,6 +71,7 @@ class AppConfig:
     llm_timeout_seconds: float = 20.0
 
     # Injection & UX
+    launch_at_startup: bool = True
     always_on_pill: bool = True
     activation_sound_enabled: bool = True
     restore_clipboard: bool = True

@@ -38,6 +38,7 @@ from whisper_lm.meetings import (
 )
 from whisper_lm.servers import ServerManager
 from whisper_lm.sound import play_activation_sound
+from whisper_lm.startup import sync_windows_startup
 from whisper_lm.ui import (
     FlowHubWindow,
     FlowPillWidget,
@@ -102,6 +103,7 @@ class WhisperLMApp:
             on_toggle_meeting_auto=self._toggle_meeting_auto,
             on_toggle_always_on=self._toggle_always_on_pill,
             on_toggle_arabic_mode=self._toggle_arabic_mode,
+            on_toggle_startup=self._toggle_launch_at_startup,
             on_quit=self.shutdown,
         )
 
@@ -384,6 +386,7 @@ class WhisperLMApp:
         self.meeting_detector.set_enabled(new_cfg.meeting_auto_detect)
         self.hotkeys.update_hotkeys(new_cfg.hotkey_hold, new_cfg.hotkey_toggle)
         self.hud.set_always_on(new_cfg.always_on_pill)
+        sync_windows_startup(new_cfg.launch_at_startup)
         self.tray.sync_config(new_cfg)
         if (
             new_cfg.llm_cleanup_enabled or new_cfg.meeting_cleanup_enabled or new_cfg.meeting_summary_enabled
@@ -501,6 +504,13 @@ class WhisperLMApp:
         self.config.always_on_pill = enabled
         self.config.save()
         self.hud.set_always_on(enabled)
+        self.tray.sync_config(self.config)
+        self.window.sync_from_config(self.config)
+
+    def _toggle_launch_at_startup(self, enabled: bool) -> None:
+        self.config.launch_at_startup = enabled
+        self.config.save()
+        sync_windows_startup(enabled)
         self.tray.sync_config(self.config)
         self.window.sync_from_config(self.config)
 
@@ -634,12 +644,14 @@ def main() -> int:
     _logger.info("Starting WhisperLM from %s", project_root)
 
     config_path = project_root / "config.json"
+    launched_at_startup = "--startup" in sys.argv[1:]
     is_fresh_install = not config_path.exists()
     config = AppConfig.load(config_path)
+    sync_windows_startup(config.launch_at_startup)
     controller = WhisperLMApp(config=config, qt_app=qt_app)
     ipc_server = _start_ipc_server(lambda: controller.window.open_page("home"))
     controller._ipc_server = ipc_server  # keep alive on controller
-    controller.start(open_hub_on_start=is_fresh_install)
+    controller.start(open_hub_on_start=is_fresh_install and not launched_at_startup)
     try:
         return qt_app.exec()
     finally:

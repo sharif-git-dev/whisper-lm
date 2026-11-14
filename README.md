@@ -12,6 +12,7 @@ Private, GPU-accelerated Windows voice dictation, automatic meeting recording, m
 - **Automatic Meeting Detection & Dual-Stream Capture:** Detects Google Meet, Zoom, Microsoft Teams, Discord, WhatsApp, Webex, and Slack calls automatically, recording both your microphone and system audio via WASAPI loopback.
 - **Multi-Speaker Attribution & Local Summaries:** Separates `You` vs remote speakers (`Speaker 1`, `Speaker 2`, ...) and summarizes full transcripts locally into structured **Overview**, **Key Points**, **Decisions**, and **Action Items** via `Qwen3-4B-Instruct-2507`.
 - **100% Local History & Privacy:** Everything—audio capture, speech recognition, AI formatting, and time-organized archives (`Today`, `This Week`, `This Month`, `All`)—stays on your machine (`127.0.0.1`).
+- **Launch at Windows Startup:** Starts silently in the system tray when you sign in to Windows (toggleable anytime from **Settings** or the tray menu).
 
 ## Quick Install
 

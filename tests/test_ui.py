@@ -431,3 +431,37 @@ def test_whisperlm_brand_icon_setup_banner_and_ipc_activate() -> None:
     finally:
         server.close()
         hub.close()
+
+
+def test_launch_at_startup_setting_and_tray_sync() -> None:
+    app = QApplication.instance() or QApplication([])
+    saved_cfgs: list[AppConfig] = []
+    tray_toggles: list[bool] = []
+    hub = FlowHubWindow(
+        config=AppConfig(launch_at_startup=True),
+        on_save_config=saved_cfgs.append,
+        on_copy_text=lambda _t: None,
+    )
+    assert hub._startup_switch.isChecked() is True
+
+    hub._startup_switch.setChecked(False)
+    hub._save_settings()
+    assert saved_cfgs[-1].launch_at_startup is False
+
+    hub.sync_from_config(AppConfig(launch_at_startup=True))
+    assert hub._startup_switch.isChecked() is True
+
+    tray = TrayController(
+        config=AppConfig(launch_at_startup=False),
+        window=hub,
+        on_toggle_cleanup=lambda _b: None,
+        on_change_hold_hotkey=lambda _k: None,
+        on_toggle_startup=tray_toggles.append,
+    )
+    assert tray._startup_action.isChecked() is False
+    tray._startup_action.trigger()
+    assert tray_toggles == [True]
+
+    app.processEvents()
+    tray.hide()
+    hub.close()

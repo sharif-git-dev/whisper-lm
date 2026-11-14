@@ -1913,12 +1913,15 @@ class FlowHubWindow(QMainWindow):
             self._toggle_combo.addItem(label, key)
 
         self._always_on_switch = _ToggleSwitch(self.config.always_on_pill)
+        self._startup_switch = _ToggleSwitch(self.config.launch_at_startup)
 
         c1.addWidget(self._setting_row("Hold to Dictate", "Hold to talk, or double-tap to stay hands-free", self._hold_combo))
         c1.addWidget(self._divider())
         c1.addWidget(self._setting_row("Hands-Free Shortcut", "Press once to start listening, press again to stop", self._toggle_combo))
         c1.addWidget(self._divider())
         c1.addWidget(self._setting_row("Floating Flow Bar", "Keep a compact Flow bar at the bottom of your screen", self._always_on_switch))
+        c1.addWidget(self._divider())
+        c1.addWidget(self._setting_row("Launch at Startup", "Start WhisperLM automatically when you sign in to Windows", self._startup_switch))
         cl.addWidget(card1)
 
         # 2. Audio
@@ -2039,6 +2042,7 @@ class FlowHubWindow(QMainWindow):
         self._set_combo_data(self._hold_combo, cfg.hotkey_hold)
         self._set_combo_data(self._toggle_combo, cfg.hotkey_toggle)
         self._always_on_switch.setChecked(cfg.always_on_pill)
+        self._startup_switch.setChecked(cfg.launch_at_startup)
         self._set_combo_data(self._mic_combo, cfg.input_device)
         self._vad_switch.setChecked(cfg.vad_enabled)
         self._sound_switch.setChecked(cfg.activation_sound_enabled)
@@ -2493,6 +2497,7 @@ class FlowHubWindow(QMainWindow):
             llm_cleanup_enabled=self._cleanup_switch.isChecked(),
             restore_clipboard=self._restore_clip_switch.isChecked(),
             always_on_pill=self._always_on_switch.isChecked(),
+            launch_at_startup=self._startup_switch.isChecked(),
             activation_sound_enabled=self._sound_switch.isChecked(),
             meeting_auto_detect=self._meeting_auto_switch.isChecked(),
             meeting_capture_system_audio=self._meeting_sys_audio_switch.isChecked(),
@@ -2554,6 +2559,7 @@ class TrayController(QWidget):
         on_toggle_always_on: Callable[[bool], None] | None = None,
         on_quit: Callable[[], None] = lambda: None,
         on_toggle_arabic_mode: Callable[[bool], None] | None = None,
+        on_toggle_startup: Callable[[bool], None] | None = None,
     ) -> None:
         super().__init__()
         self._window = window
@@ -2563,6 +2569,7 @@ class TrayController(QWidget):
         self._on_toggle_meeting_auto = on_toggle_meeting_auto or (lambda _b: None)
         self._on_toggle_always_on = on_toggle_always_on or (lambda _b: None)
         self._on_toggle_arabic_mode = on_toggle_arabic_mode or (lambda _b: None)
+        self._on_toggle_startup = on_toggle_startup or (lambda _b: None)
         self._on_quit = on_quit
 
         self._tray = QSystemTrayIcon(_build_tray_icon(_TEXT_PRIMARY), self)
@@ -2606,6 +2613,11 @@ class TrayController(QWidget):
         self._always_on_action.toggled.connect(self._on_toggle_always_on)
         self._menu.addAction(self._always_on_action)
 
+        self._startup_action = QAction("Launch at Startup", self._menu)
+        self._startup_action.setCheckable(True)
+        self._startup_action.toggled.connect(self._on_toggle_startup)
+        self._menu.addAction(self._startup_action)
+
         self._cleanup_action = QAction("Smart Formatting", self._menu)
         self._cleanup_action.setCheckable(True)
         self._cleanup_action.toggled.connect(self._on_toggle_cleanup)
@@ -2647,6 +2659,7 @@ class TrayController(QWidget):
 
     def sync_config(self, config: AppConfig) -> None:
         self._set_action_checked(self._always_on_action, config.always_on_pill)
+        self._set_action_checked(self._startup_action, config.launch_at_startup)
         self._set_action_checked(self._cleanup_action, config.llm_cleanup_enabled)
         self._set_action_checked(self._arabic_action, config.arabic_enabled)
         self._set_action_checked(self._meeting_auto_action, config.meeting_auto_detect)
