@@ -1,6 +1,6 @@
 """Tests for Wispr-style HUD waveform pill, Hub navigation/meetings UI, tray, and single-instance mutex."""
 
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QPushButton
 
 from whisper_lm.app import (
     _acquire_single_instance_mutex,
@@ -509,4 +509,53 @@ def test_hub_update_banner_and_cloud_backup_settings() -> None:
     assert saved_cfgs[-1].cloud_backup_mode == "firebase"
     assert saved_cfgs[-1].cloud_firebase_url == "https://demo-db.firebaseio.com"
 
+    hub.close()
+
+
+def test_home_hides_clear_button_and_settings_collapses_clear_history() -> None:
+    app = QApplication.instance() or QApplication([])
+    cleared: list[bool] = []
+    hub = FlowHubWindow(
+        config=AppConfig(),
+        on_save_config=lambda _cfg: None,
+        on_copy_text=lambda _t: None,
+        on_clear_history=lambda: cleared.append(True),
+    )
+    hub._set_history(
+        [
+            HistoryEntry(
+                "10:00:00",
+                "Notes",
+                "hello world",
+                "Hello world.",
+                "en",
+                date="2026-11-14",
+            )
+        ]
+    )
+
+    home_page = hub._stack.widget(0)
+    home_btn_texts = [btn.text().strip() for btn in home_page.findChildren(QPushButton)]
+    assert "Clear" not in home_btn_texts
+
+    hub._switch_page(3)
+    assert hub._data_panel.isHidden()
+    assert hub._clear_history_btn.text() == "Clear All Dictations"
+
+    hub._data_toggle_btn.click()
+    assert not hub._data_panel.isHidden()
+    assert hub._data_toggle_btn.text().endswith("▾")
+
+    hub._tile_words.pulse()
+    hub._brand_mark.set_pulsing(True)
+    hub._brand_mark.set_pulsing(False)
+
+    hub._clear_history()
+    assert cleared == [True]
+    assert hub._tile_sessions.value_lbl.text() == "0"
+
+    hub._data_toggle_btn.click()
+    assert hub._data_panel.isHidden()
+    assert hub._data_toggle_btn.text().endswith("▸")
+    app.processEvents()
     hub.close()

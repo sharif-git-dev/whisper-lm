@@ -9,7 +9,17 @@ import math
 from typing import Any, Callable
 
 import numpy as np
-from PySide6.QtCore import Property, QEasingCurve, QPoint, QPropertyAnimation, QRectF, Qt, QTimer, Signal
+from PySide6.QtCore import (
+    Property,
+    QEasingCurve,
+    QPoint,
+    QPropertyAnimation,
+    QRectF,
+    Qt,
+    QTimer,
+    QVariantAnimation,
+    Signal,
+)
 from PySide6.QtGui import (
     QAction,
     QActionGroup,
@@ -23,6 +33,7 @@ from PySide6.QtGui import (
     QPainterPath,
     QPen,
     QPixmap,
+    QRadialGradient,
 )
 from PySide6.QtWidgets import (
     QAbstractButton,
@@ -30,6 +41,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QFileDialog,
     QFrame,
+    QGraphicsOpacityEffect,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -75,27 +87,63 @@ _WS_EX_NOACTIVATE = 0x08000000
 _WS_EX_TOOLWINDOW = 0x00000080
 _DWMWA_USE_IMMUTABLE_DARK_MODE = 20
 
-# WhisperLM obsidian + electric indigo accent palette
-_BG_ROOT = "#0B0B0D"
-_BG_SIDEBAR = "#111114"
-_BG_CARD = "#16161A"
-_BG_CARD_HOVER = "#1C1C22"
-_BG_INPUT = "#101014"
-_BORDER = "#24242A"
-_BORDER_SUBTLE = "#1E1E24"
-_TEXT_PRIMARY = "#F5F5F7"
-_TEXT_SECONDARY = "#8E8E96"
-_TEXT_MUTED = "#5E5E66"
+# WhisperLM deep obsidian + electric indigo accent palette
+_BG_ROOT = "#040406"
+_BG_SIDEBAR = "#07070A"
+_BG_CARD = "#0B0B0F"
+_BG_CARD_HOVER = "#101017"
+_BG_INPUT = "#060609"
+_BORDER = "#171720"
+_BORDER_SUBTLE = "#121219"
+_TEXT_PRIMARY = "#F4F4F8"
+_TEXT_SECONDARY = "#8A8A98"
+_TEXT_MUTED = "#50505E"
 _ACCENT_INDIGO = "#7B8BFF"
 _ACCENT_INDIGO_DEEP = "#5868F2"
 _ACCENT_GREEN = "#34D399"
 _ACCENT_RED = "#F87171"
 
 _DARK_MENU_QSS = (
-    f"QMenu {{ background-color: {_BG_CARD}; color: {_TEXT_PRIMARY}; border: 1px solid {_BORDER}; padding: 6px; }}"
+    f"QMenu {{ background-color: {_BG_CARD}; color: {_TEXT_PRIMARY}; border: 1px solid #1E1E2A; padding: 6px; border-radius: 10px; }}"
     "QMenu::item { padding: 6px 18px; border-radius: 6px; }"
-    "QMenu::item:selected { background-color: #25252E; }"
+    "QMenu::item:selected { background-color: #161622; }"
 )
+
+
+def _lerp_color(c1: QColor, c2: QColor, t: float) -> QColor:
+    clamped = max(0.0, min(1.0, float(t)))
+    return QColor(
+        int(round(c1.red() + (c2.red() - c1.red()) * clamped)),
+        int(round(c1.green() + (c2.green() - c1.green()) * clamped)),
+        int(round(c1.blue() + (c2.blue() - c1.blue()) * clamped)),
+        int(round(c1.alpha() + (c2.alpha() - c1.alpha()) * clamped)),
+    )
+
+
+def _fade_in_widget(widget: QWidget, duration: int = 165) -> None:
+    """Apply a crisp non-blocking fade-in transition without mutating widget visibility."""
+    prev = getattr(widget, "_active_fade_anim", None)
+    if isinstance(prev, QPropertyAnimation):
+        prev.stop()
+    effect = widget.graphicsEffect()
+    if not isinstance(effect, QGraphicsOpacityEffect):
+        effect = QGraphicsOpacityEffect(widget)
+        widget.setGraphicsEffect(effect)
+    effect.setOpacity(0.0)
+    anim = QPropertyAnimation(effect, b"opacity", widget)
+    anim.setDuration(duration)
+    anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+    anim.setStartValue(0.0)
+    anim.setEndValue(1.0)
+
+    def _cleanup() -> None:
+        if getattr(widget, "_active_fade_anim", None) is anim:
+            widget._active_fade_anim = None
+            widget.setGraphicsEffect(None)
+
+    anim.finished.connect(_cleanup)
+    widget._active_fade_anim = anim
+    anim.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
 
 
 def _apply_noactivate_style(widget: QWidget) -> None:
@@ -136,8 +184,8 @@ class _ToggleSwitch(QAbstractButton):
         self.setFixedSize(40, 22)
         self._thumb_x = 21.0 if checked else 3.0
         self._anim = QPropertyAnimation(self, b"thumbPos", self)
-        self._anim.setDuration(115)
-        self._anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._anim.setDuration(145)
+        self._anim.setEasingCurve(QEasingCurve.Type.OutBack)
         self.setChecked(checked)
         self.toggled.connect(self._animate_thumb)
 
@@ -165,14 +213,15 @@ class _ToggleSwitch(QAbstractButton):
     def paintEvent(self, _event) -> None:
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        checked = self.isChecked()
+        progress = max(0.0, min(1.0, (self._thumb_x - 3.0) / 18.0))
 
-        track_color = QColor(_ACCENT_INDIGO if checked else "#282830")
-        painter.setPen(Qt.PenStyle.NoPen)
+        track_color = _lerp_color(QColor("#15151E"), QColor(_ACCENT_INDIGO), progress)
+        painter.setPen(QPen(_lerp_color(QColor("#232330"), QColor(123, 139, 255, 160), progress), 1.0))
         painter.setBrush(QBrush(track_color))
-        painter.drawRoundedRect(QRectF(0, 0, self.width(), self.height()), 11.0, 11.0)
+        painter.drawRoundedRect(QRectF(0.5, 0.5, self.width() - 1.0, self.height() - 1.0), 10.5, 10.5)
 
-        thumb_color = QColor("#FFFFFF" if checked else _TEXT_SECONDARY)
+        painter.setPen(Qt.PenStyle.NoPen)
+        thumb_color = _lerp_color(QColor(_TEXT_SECONDARY), QColor("#FFFFFF"), progress)
         painter.setBrush(QBrush(thumb_color))
         painter.drawEllipse(QRectF(self._thumb_x, 3.0, 16.0, 16.0))
 
@@ -228,20 +277,64 @@ def _draw_whisperlm_glyph(
 
 
 class _BrandMark(QWidget):
-    """Crisp WhisperLM soundwave + indigo spark icon."""
+    """Crisp WhisperLM soundwave + indigo spark icon with gentle hover & status breath."""
 
     def __init__(self, size: int = 20, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setFixedSize(size, size)
+        self.setMouseTracking(True)
+        self._phase = 0.0
+        self._hovered = False
+        self._pulsing = False
+        self._timer = QTimer(self)
+        self._timer.setInterval(33)
+        self._timer.timeout.connect(self._tick)
+
+    def _tick(self) -> None:
+        self._phase += 0.16
+        self.update()
+
+    def set_pulsing(self, active: bool) -> None:
+        self._pulsing = bool(active)
+        if self._pulsing and not self._timer.isActive():
+            self._timer.start()
+        elif not self._pulsing and not self._hovered:
+            self._timer.stop()
+            self._phase = 0.0
+            self.update()
+
+    def enterEvent(self, event) -> None:
+        self._hovered = True
+        if not self._timer.isActive():
+            self._timer.start()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:
+        self._hovered = False
+        if not self._pulsing:
+            self._timer.stop()
+            self._phase = 0.0
+            self.update()
+        super().leaveEvent(event)
 
     def paintEvent(self, _event) -> None:
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        base = (0.48, 0.94, 0.62)
+        if self._timer.isActive():
+            amp = 0.16
+            heights = tuple(
+                max(0.28, min(1.0, h + amp * math.sin(self._phase - idx * 0.9)))
+                for idx, h in enumerate(base)
+            )
+        else:
+            heights = base
         _draw_whisperlm_glyph(
             painter,
             QRectF(0.5, 1.0, float(self.width()) - 1.0, float(self.height()) - 2.0),
             QColor(_TEXT_PRIMARY),
             QColor(_ACCENT_INDIGO),
+            heights=heights,
         )
 
 
@@ -250,22 +343,32 @@ def _draw_pill_shell(
     rect: QRectF,
     radius: float,
     border_alpha: int,
-    fill_alpha: int = 248,
+    fill_alpha: int = 250,
+    glow_color: QColor | None = None,
 ) -> None:
-    """Paint a translucent dark shadow + frosted obsidian capsule."""
-    for expand, alpha in ((4.0, 14), (2.2, 26), (1.0, 42)):
+    """Paint a deep obsidian capsule with ambient shadow and optional animated accent rim."""
+    for expand, alpha in ((4.5, 18), (2.4, 34), (1.0, 56)):
         shadow_rect = rect.adjusted(-expand, -expand + 1.0, expand, expand + 2.0)
         shadow_path = QPainterPath()
         shadow_path.addRoundedRect(shadow_rect, radius + expand, radius + expand)
         painter.fillPath(shadow_path, QColor(0, 0, 0, alpha))
 
+    if glow_color is not None and glow_color.alpha() > 0:
+        aura_rect = rect.adjusted(-2.0, -2.0, 2.0, 2.0)
+        aura_path = QPainterPath()
+        aura_path.addRoundedRect(aura_rect, radius + 2.0, radius + 2.0)
+        painter.setPen(QPen(glow_color, 1.6))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawPath(aura_path)
+
     shell_path = QPainterPath()
     shell_path.addRoundedRect(rect, radius, radius)
     grad = QLinearGradient(rect.topLeft(), rect.bottomLeft())
-    grad.setColorAt(0.0, QColor(22, 22, 26, fill_alpha))
-    grad.setColorAt(1.0, QColor(11, 11, 14, min(255, fill_alpha + 2)))
+    grad.setColorAt(0.0, QColor(14, 14, 20, fill_alpha))
+    grad.setColorAt(1.0, QColor(5, 5, 8, min(255, fill_alpha + 4)))
     painter.fillPath(shell_path, QBrush(grad))
-    painter.setPen(QPen(QColor(255, 255, 255, border_alpha), 1.0))
+    border_pen_color = glow_color if (glow_color is not None and glow_color.alpha() > border_alpha) else QColor(255, 255, 255, border_alpha)
+    painter.setPen(QPen(border_pen_color, 1.0))
     painter.drawPath(shell_path)
 
 
@@ -742,23 +845,39 @@ class FlowPillWidget(QWidget):
         self._custom_bottom_center = None
         self._reposition()
 
+    def _pill_glow_color(self) -> QColor | None:
+        if self._state == "listening":
+            pulse = 0.55 + 0.45 * math.sin(self._phase * 1.15)
+            return QColor(123, 139, 255, int(round(52 + 68 * pulse)))
+        if self._state in {"cleaning", "loading", "transcribing"}:
+            pulse = 0.5 + 0.5 * math.sin(self._phase * 0.9)
+            return QColor(123, 139, 255, int(round(36 + 44 * pulse)))
+        if self._state == "error":
+            return QColor(248, 113, 113, 96)
+        if self._session_recording:
+            return QColor(239, 68, 68, 72)
+        if self._hovered:
+            return QColor(123, 139, 255, 65)
+        return None
+
     def paintEvent(self, _event) -> None:
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        glow = self._pill_glow_color()
         if not self._always_on:
             rect = QRectF(8.0, 6.0, self.width() - 16.0, self.height() - 12.0)
             alpha = 46 if self._state == "listening" else (38 if self._state == "error" else 30)
-            _draw_pill_shell(painter, rect, radius=14.0, border_alpha=alpha)
+            _draw_pill_shell(painter, rect, radius=14.0, border_alpha=alpha, glow_color=glow)
             return
 
         inset_x, inset_y, radius, glyph_a, glyph_shift, _, _, rec_a = self._current_visuals()
         rect = QRectF(inset_x, inset_y, self.width() - 2.0 * inset_x, self.height() - 2.0 * inset_y)
         is_idle_like = self._state == "idle"
-        base_border = 58 if self._hovered else 36
+        base_border = 58 if self._hovered else 34
         target_border = 46 if self._state == "listening" else (38 if self._state == "error" else 30)
         border_alpha = int(round(base_border * glyph_a + target_border * (1.0 - glyph_a)))
-        fill_alpha = int(round((246 if self._hovered else 228) * glyph_a + 248 * (1.0 - glyph_a)))
-        _draw_pill_shell(painter, rect, radius=radius, border_alpha=border_alpha, fill_alpha=fill_alpha)
+        fill_alpha = int(round((248 if self._hovered else 234) * glyph_a + 250 * (1.0 - glyph_a)))
+        _draw_pill_shell(painter, rect, radius=radius, border_alpha=border_alpha, fill_alpha=fill_alpha, glow_color=glow)
 
         if glyph_a > 0.02:
             glyph_alpha = int(round((242 if self._hovered else 182) * glyph_a))
@@ -957,6 +1076,7 @@ class MeetingPillWidget(QWidget):
         self._started_at = 0.0
         self._state = "idle"
         self._pulse_on = True
+        self._pulse_phase = 0.0
         self._app_label = "Meeting"
 
         self.setWindowFlags(
@@ -986,9 +1106,9 @@ class MeetingPillWidget(QWidget):
         self._stop_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._stop_btn.setFixedHeight(20)
         self._stop_btn.setStyleSheet(
-            f"QPushButton {{ background: #222229; color: {_TEXT_SECONDARY}; border: 1px solid #32323C; "
+            f"QPushButton {{ background: #14141D; color: {_TEXT_SECONDARY}; border: 1px solid #242433; "
             f"border-radius: 10px; padding: 0 9px; font-size: 11px; font-weight: 600; outline: none; }}"
-            "QPushButton:hover { background: #3A1D22; border-color: #6B2A35; color: #FCA5A5; }"
+            "QPushButton:hover { background: #33161B; border-color: #6B2A35; color: #FCA5A5; }"
         )
         self._stop_btn.clicked.connect(self._on_stop_clicked)
 
@@ -999,13 +1119,27 @@ class MeetingPillWidget(QWidget):
         self._tick_timer = QTimer(self)
         self._tick_timer.setInterval(1000)
         self._tick_timer.timeout.connect(self._update_elapsed)
+
+        self._pulse_timer = QTimer(self)
+        self._pulse_timer.setInterval(33)
+        self._pulse_timer.timeout.connect(self._step_pulse)
+
+        self._fade_anim = QPropertyAnimation(self, b"windowOpacity", self)
+        self._fade_anim.setDuration(175)
+        self._fade_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
         self.state_changed.connect(self._apply_state)
 
+    def _step_pulse(self) -> None:
+        self._pulse_phase += 0.14
+        self.update()
+
     def _apply_state(self, state: str, label: str) -> None:
+        was_visible = self.isVisible()
         self._state = state
         self._app_label = (label or "Meeting")[:14]
         if state == "idle":
             self._tick_timer.stop()
+            self._pulse_timer.stop()
             self.hide()
             return
         if state == "recording":
@@ -1016,8 +1150,10 @@ class MeetingPillWidget(QWidget):
             self._stop_btn.show()
             self._update_elapsed()
             self._tick_timer.start()
+            self._pulse_timer.start()
         elif state in {"cleaning", "summarizing"}:
             self._tick_timer.stop()
+            self._pulse_timer.start()
             self._text.setText("Summarizing meeting..." if state == "summarizing" else "Polishing meeting...")
             self._stop_btn.hide()
 
@@ -1025,8 +1161,17 @@ class MeetingPillWidget(QWidget):
         if not self._positioned:
             self._place_default()
             self._positioned = True
-        self.show()
-        _apply_noactivate_style(self)
+        if not was_visible:
+            self.setWindowOpacity(0.0)
+            self.show()
+            _apply_noactivate_style(self)
+            self._fade_anim.stop()
+            self._fade_anim.setStartValue(0.0)
+            self._fade_anim.setEndValue(1.0)
+            self._fade_anim.start()
+        else:
+            self.show()
+            _apply_noactivate_style(self)
         self.update()
 
     def _update_elapsed(self) -> None:
@@ -1062,25 +1207,62 @@ class MeetingPillWidget(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         rect = QRectF(8.0, 6.0, self.width() - 16.0, self.height() - 12.0)
-        _draw_pill_shell(painter, rect, radius=15.0, border_alpha=32)
+        breath = 0.5 + 0.5 * math.sin(self._pulse_phase)
+        if self._state == "recording":
+            glow = QColor(248, 113, 113, int(round(42 + 64 * breath)))
+            dot_color = _lerp_color(QColor("#992929"), QColor(_ACCENT_RED), breath)
+        else:
+            glow = QColor(123, 139, 255, int(round(36 + 52 * breath)))
+            dot_color = _lerp_color(QColor(_TEXT_SECONDARY), QColor(_ACCENT_INDIGO), breath)
+        _draw_pill_shell(painter, rect, radius=15.0, border_alpha=32, glow_color=glow)
 
-        dot_color = (
-            QColor(_ACCENT_RED if self._pulse_on else "#8C2C2C")
-            if self._state == "recording"
-            else QColor(_TEXT_SECONDARY)
-        )
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QBrush(dot_color))
         cy = rect.center().y()
+        if self._state == "recording":
+            halo_r = 5.5 + 2.5 * breath
+            painter.setBrush(QBrush(QColor(248, 113, 113, int(round(75 * (1.0 - 0.5 * breath))))))
+            painter.drawEllipse(QRectF(23.5 - halo_r, cy - halo_r, halo_r * 2.0, halo_r * 2.0))
+        painter.setBrush(QBrush(dot_color))
         painter.drawEllipse(QRectF(20.0, cy - 3.5, 7.0, 7.0))
 
 
-class _MetricTile(QFrame):
-    """Monochrome single-value metric card for Home."""
+class _HoverCardMixin:
+    """Shared smooth hover progress animation for dark interactive surfaces."""
+
+    def _init_hover_anim(self, duration: int = 150) -> None:
+        self._hover_t = 0.0
+        self._hover_anim = QVariantAnimation(self)
+        self._hover_anim.setDuration(duration)
+        self._hover_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._hover_anim.valueChanged.connect(self._on_hover_val)
+
+    def _on_hover_val(self, val: Any) -> None:
+        self._hover_t = float(val)
+        self.update()
+
+    def _start_hover_anim(self, hovered: bool) -> None:
+        self._hover_anim.stop()
+        self._hover_anim.setStartValue(self._hover_t)
+        self._hover_anim.setEndValue(1.0 if hovered else 0.0)
+        self._hover_anim.start()
+
+
+class _MetricTile(_HoverCardMixin, QFrame):
+    """Deep obsidian metric card with animated hover border glow and update shimmer."""
 
     def __init__(self, label: str, value: str, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("MetricTile")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
+        self.setMouseTracking(True)
+        self._init_hover_anim(150)
+
+        self._pulse_t = 0.0
+        self._pulse_anim = QVariantAnimation(self)
+        self._pulse_anim.setDuration(420)
+        self._pulse_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._pulse_anim.valueChanged.connect(self._on_pulse_val)
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 13, 16, 13)
         layout.setSpacing(4)
@@ -1092,6 +1274,43 @@ class _MetricTile(QFrame):
 
         layout.addWidget(self.value_lbl)
         layout.addWidget(self.label_lbl)
+
+    def _on_pulse_val(self, val: Any) -> None:
+        self._pulse_t = float(val)
+        self.update()
+
+    def pulse(self) -> None:
+        self._pulse_anim.stop()
+        self._pulse_anim.setStartValue(1.0)
+        self._pulse_anim.setEndValue(0.0)
+        self._pulse_anim.start()
+
+    def enterEvent(self, event) -> None:
+        self._start_hover_anim(True)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:
+        self._start_hover_anim(False)
+        super().leaveEvent(event)
+
+    def paintEvent(self, _event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        rect = QRectF(0.5, 0.5, self.width() - 1.0, self.height() - 1.0)
+        fill = _lerp_color(QColor(_BG_CARD), QColor(_BG_CARD_HOVER), self._hover_t)
+        border = _lerp_color(QColor(_BORDER), QColor(123, 139, 255, 110), max(self._hover_t, self._pulse_t * 0.9))
+        painter.setPen(QPen(border, 1.0))
+        painter.setBrush(QBrush(fill))
+        painter.drawRoundedRect(rect, 12.0, 12.0)
+
+        glow_alpha = int(round(max(self._hover_t * 34.0, self._pulse_t * 58.0)))
+        if glow_alpha > 1:
+            grad = QRadialGradient(rect.width() * 0.25, 0.0, rect.width() * 0.85)
+            grad.setColorAt(0.0, QColor(123, 139, 255, glow_alpha))
+            grad.setColorAt(1.0, QColor(123, 139, 255, 0))
+            clip = QPainterPath()
+            clip.addRoundedRect(rect, 12.0, 12.0)
+            painter.fillPath(clip, QBrush(grad))
 
 
 def _bidi_ltr_display(text: str) -> str:
@@ -1111,13 +1330,15 @@ def _hairline_divider() -> QFrame:
     return line
 
 
-class _DictationRow(QWidget):
-    """Single Wispr Flow-style transcript row inside a grouped day card."""
+class _DictationRow(_HoverCardMixin, QWidget):
+    """Single transcript row with smooth hover highlight inside a grouped day card."""
 
     def __init__(self, entry: HistoryEntry, on_copy: Callable[[str], None], parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._on_copy = on_copy
         self._text = entry.cleaned_text
+        self.setMouseTracking(True)
+        self._init_hover_anim(135)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 13, 16, 13)
@@ -1144,6 +1365,25 @@ class _DictationRow(QWidget):
         body.setWordWrap(True)
         body.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         layout.addWidget(body)
+
+    def enterEvent(self, event) -> None:
+        self._start_hover_anim(True)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:
+        self._start_hover_anim(False)
+        super().leaveEvent(event)
+
+    def paintEvent(self, _event) -> None:
+        if self._hover_t <= 0.01:
+            return
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QBrush(QColor(123, 139, 255, int(round(12 * self._hover_t)))))
+        painter.drawRoundedRect(QRectF(4.0, 2.0, self.width() - 8.0, self.height() - 4.0), 8.0, 8.0)
+        painter.setBrush(QBrush(QColor(123, 139, 255, int(round(165 * self._hover_t)))))
+        painter.drawRoundedRect(QRectF(4.0, 10.0, 2.5, max(8.0, self.height() - 20.0)), 1.25, 1.25)
 
     def _handle_copy(self) -> None:
         self._on_copy(self._text)
@@ -1268,12 +1508,12 @@ class FlowHubWindow(QMainWindow):
                 font-weight: 500;
             }}
             QPushButton#NavBtn:hover {{
-                background-color: #18181D;
+                background-color: #101016;
                 color: {_TEXT_PRIMARY};
             }}
             QPushButton#NavBtn[active="true"] {{
-                background-color: #1D1D27;
-                border-color: rgba(123, 139, 255, 0.35);
+                background-color: #12121E;
+                border-color: rgba(123, 139, 255, 0.38);
                 color: {_TEXT_PRIMARY};
                 font-weight: 600;
             }}
@@ -1342,32 +1582,46 @@ class FlowHubWindow(QMainWindow):
                 font-weight: 600;
             }}
             QPushButton#PrimaryPillBtn:hover {{
-                background-color: #E2E2E6;
+                background-color: #DFDFE8;
             }}
             QPushButton#DangerPillBtn {{
-                background-color: #2A161A;
+                background-color: #1D0D11;
                 color: #FCA5A5;
-                border: 1px solid #5B242E;
+                border: 1px solid #4E1D27;
                 border-radius: 16px;
                 padding: 8px 16px;
                 font-size: 12.5px;
                 font-weight: 600;
             }}
             QPushButton#DangerPillBtn:hover {{
-                background-color: #381C21;
+                background-color: #2C1217;
+                border-color: #7A2B3A;
             }}
             QPushButton#GhostPillBtn {{
-                background-color: #1D1D23;
+                background-color: #0F0F15;
                 color: {_TEXT_SECONDARY};
-                border: 1px solid #2C2C34;
+                border: 1px solid #1C1C26;
                 border-radius: 12px;
                 padding: 4px 11px;
                 font-size: 11.5px;
                 font-weight: 500;
             }}
             QPushButton#GhostPillBtn:hover {{
-                background-color: #26262E;
+                background-color: #161621;
+                border-color: rgba(123, 139, 255, 0.42);
                 color: {_TEXT_PRIMARY};
+            }}
+            QPushButton#DiscreteLinkBtn {{
+                background-color: transparent;
+                color: {_TEXT_MUTED};
+                border: none;
+                padding: 4px 2px;
+                text-align: left;
+                font-size: 12px;
+                font-weight: 500;
+            }}
+            QPushButton#DiscreteLinkBtn:hover {{
+                color: {_TEXT_SECONDARY};
             }}
             QPushButton#SegBtn {{
                 background-color: transparent;
@@ -1379,14 +1633,14 @@ class FlowHubWindow(QMainWindow):
                 font-weight: 500;
             }}
             QPushButton#SegBtn[active="true"] {{
-                background-color: #25252D;
+                background-color: #14141F;
                 color: {_TEXT_PRIMARY};
-                border-color: #34343F;
+                border-color: rgba(123, 139, 255, 0.35);
             }}
             QComboBox, QPlainTextEdit, QLineEdit {{
                 background-color: {_BG_INPUT};
                 color: {_TEXT_PRIMARY};
-                border: 1px solid #2A2A32;
+                border: 1px solid #1B1B25;
                 border-radius: 8px;
                 padding: 6px 10px;
                 font-size: 12.5px;
@@ -1400,7 +1654,7 @@ class FlowHubWindow(QMainWindow):
             QComboBox QAbstractItemView {{
                 background-color: {_BG_CARD};
                 color: {_TEXT_PRIMARY};
-                selection-background-color: #272730;
+                selection-background-color: #171724;
                 border: 1px solid {_BORDER};
             }}
             QListWidget#MeetingList {{
@@ -1417,11 +1671,39 @@ class FlowHubWindow(QMainWindow):
                 color: {_TEXT_PRIMARY};
             }}
             QListWidget#MeetingList::item:selected {{
-                background-color: #23232B;
-                border: 1px solid #32323D;
+                background-color: #141420;
+                border: 1px solid rgba(123, 139, 255, 0.32);
             }}
             QListWidget#MeetingList::item:hover:!selected {{
-                background-color: #1B1B21;
+                background-color: #101017;
+            }}
+            QMessageBox, QDialog {{
+                background-color: {_BG_CARD};
+                color: {_TEXT_PRIMARY};
+            }}
+            QMessageBox QLabel {{
+                color: {_TEXT_PRIMARY};
+                font-size: 13px;
+            }}
+            QMessageBox QPushButton {{
+                background-color: #12121A;
+                color: {_TEXT_PRIMARY};
+                border: 1px solid #222230;
+                border-radius: 10px;
+                padding: 6px 14px;
+                min-width: 74px;
+                font-size: 12.5px;
+            }}
+            QMessageBox QPushButton:hover {{
+                background-color: #1A1A26;
+                border-color: rgba(123, 139, 255, 0.48);
+            }}
+            QToolTip {{
+                background-color: #0D0D14;
+                color: {_TEXT_PRIMARY};
+                border: 1px solid #232333;
+                padding: 4px 8px;
+                border-radius: 6px;
             }}
             QScrollArea {{
                 border: none;
@@ -1433,12 +1715,12 @@ class FlowHubWindow(QMainWindow):
                 margin: 4px 0 4px 0;
             }}
             QScrollBar::handle:vertical {{
-                background: #2C2C35;
+                background: #1B1B24;
                 border-radius: 3px;
                 min-height: 24px;
             }}
             QScrollBar::handle:vertical:hover {{
-                background: #3E3E4A;
+                background: #2C2C3A;
             }}
             QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical,
             QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
@@ -1446,7 +1728,7 @@ class FlowHubWindow(QMainWindow):
                 height: 0px;
             }}
             QProgressBar {{
-                background-color: #1D1D24;
+                background-color: #0F0F16;
                 border: none;
                 border-radius: 3px;
                 max-height: 6px;
@@ -1477,6 +1759,7 @@ class FlowHubWindow(QMainWindow):
         shell.addWidget(self._stack, 1)
 
         self._switch_page(0)
+        self._page_ready = True
         self.sync_from_config(self.config)
 
     def _build_sidebar(self) -> QWidget:
@@ -1491,7 +1774,8 @@ class FlowHubWindow(QMainWindow):
         brand_row = QHBoxLayout()
         brand_row.setContentsMargins(6, 4, 6, 14)
         brand_row.setSpacing(10)
-        brand_row.addWidget(_BrandMark(20))
+        self._brand_mark = _BrandMark(20)
+        brand_row.addWidget(self._brand_mark)
 
         title = QLabel("WhisperLM")
         title.setFont(QFont("Segoe UI", 11.5, QFont.Weight.DemiBold))
@@ -1528,11 +1812,16 @@ class FlowHubWindow(QMainWindow):
         return sidebar
 
     def _switch_page(self, index: int) -> None:
+        changed = self._stack.currentIndex() != index
         self._stack.setCurrentIndex(index)
         for idx, btn in enumerate(self._nav_buttons):
             btn.setProperty("active", "true" if idx == index else "false")
             btn.style().unpolish(btn)
             btn.style().polish(btn)
+        if getattr(self, "_page_ready", False) and changed and self.isVisible():
+            target = self._stack.currentWidget()
+            if target is not None:
+                _fade_in_widget(target, duration=155)
 
     def open_page(self, page: str) -> None:
         mapping = {"home": 0, "meetings": 1, "dictionary": 2, "settings": 3}
@@ -1558,19 +1847,13 @@ class FlowHubWindow(QMainWindow):
         title_box.addWidget(self._home_sub)
         header.addLayout(title_box)
         header.addStretch(1)
-
-        clear_btn = QPushButton("Clear")
-        clear_btn.setObjectName("GhostPillBtn")
-        clear_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        clear_btn.clicked.connect(self._confirm_and_clear_history)
-        header.addWidget(clear_btn)
         outer.addLayout(header)
 
         # Runtime setup / download status banner (hidden once Ready)
         self._setup_banner = QFrame()
         self._setup_banner.setObjectName("Card")
         self._setup_banner.setStyleSheet(
-            f"QFrame#Card {{ background-color: #14141C; border: 1px solid rgba(123, 139, 255, 0.38); border-radius: 12px; }}"
+            f"QFrame#Card {{ background-color: #0B0B14; border: 1px solid rgba(123, 139, 255, 0.36); border-radius: 12px; }}"
         )
         sb = QVBoxLayout(self._setup_banner)
         sb.setContentsMargins(16, 12, 16, 12)
@@ -1598,7 +1881,7 @@ class FlowHubWindow(QMainWindow):
         self._update_banner = QFrame()
         self._update_banner.setObjectName("Card")
         self._update_banner.setStyleSheet(
-            f"QFrame#Card {{ background-color: #14141C; border: 1px solid rgba(123, 139, 255, 0.45); border-radius: 12px; }}"
+            f"QFrame#Card {{ background-color: #0B0B14; border: 1px solid rgba(123, 139, 255, 0.42); border-radius: 12px; }}"
         )
         ub = QHBoxLayout(self._update_banner)
         ub.setContentsMargins(16, 12, 16, 12)
@@ -1864,7 +2147,7 @@ class FlowHubWindow(QMainWindow):
         title_box.setSpacing(3)
         title = QLabel("Dictionary")
         title.setObjectName("PageTitle")
-        sub = QLabel("Add names, terms, and phrases so Flow always spells them your way")
+        sub = QLabel("Add names, terms, and phrases so WhisperLM always spells them your way")
         sub.setObjectName("PageSubtitle")
         title_box.addWidget(title)
         title_box.addWidget(sub)
@@ -2145,10 +2428,54 @@ class FlowHubWindow(QMainWindow):
 
         cl.addWidget(card5)
 
+        # Hidden Local Data panel inside Settings so clearing dictations is safely tucked away
+        self._data_toggle_btn = QPushButton("Manage local data ▸")
+        self._data_toggle_btn.setObjectName("DiscreteLinkBtn")
+        self._data_toggle_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._data_toggle_btn.clicked.connect(self._toggle_data_panel)
+        cl.addWidget(self._data_toggle_btn)
+
+        self._data_panel = QFrame()
+        self._data_panel.setObjectName("Card")
+        dp = QVBoxLayout(self._data_panel)
+        dp.setContentsMargins(0, 0, 0, 0)
+        dp.setSpacing(0)
+        self._clear_history_btn = QPushButton("Clear All Dictations")
+        self._clear_history_btn.setObjectName("DangerPillBtn")
+        self._clear_history_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._clear_history_btn.clicked.connect(self._confirm_and_clear_history)
+        dp.addWidget(
+            self._setting_row(
+                "Clear Dictation History",
+                "Permanently delete saved dictations from local storage and synced backups",
+                self._clear_history_btn,
+            )
+        )
+        self._data_panel.hide()
+        cl.addWidget(self._data_panel)
+
         cl.addStretch(1)
         scroll.setWidget(inner)
         outer.addWidget(scroll, 1)
         return page
+
+    def _toggle_data_panel(self) -> None:
+        opening = self._data_panel.isHidden()
+        self._data_toggle_btn.setText("Manage local data ▾" if opening else "Manage local data ▸")
+        if opening:
+            self._data_panel.setMaximumHeight(0)
+            self._data_panel.show()
+            target_h = max(68, self._data_panel.sizeHint().height())
+            anim = QPropertyAnimation(self._data_panel, b"maximumHeight", self)
+            anim.setDuration(190)
+            anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+            anim.setStartValue(0)
+            anim.setEndValue(target_h)
+            anim.finished.connect(lambda: self._data_panel.setMaximumHeight(16777215))
+            anim.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
+            _fade_in_widget(self._data_panel, duration=180)
+        else:
+            self._data_panel.hide()
 
     # --- State & Sync Helpers ---
 
@@ -2226,9 +2553,16 @@ class FlowHubWindow(QMainWindow):
 
     def _update_cloud_detail_visibility(self) -> None:
         choice = str(self._cloud_combo.currentData() or "auto")
-        self._cloud_folder_row.setVisible(choice == "folder_custom")
-        self._cloud_firebase_row.setVisible(choice == "firebase")
-        self._cloud_github_row.setVisible(choice == "github")
+        animate = getattr(self, "_page_ready", False) and self.isVisible()
+        for row, visible in (
+            (self._cloud_folder_row, choice == "folder_custom"),
+            (self._cloud_firebase_row, choice == "firebase"),
+            (self._cloud_github_row, choice == "github"),
+        ):
+            was_hidden = row.isHidden()
+            row.setVisible(visible)
+            if animate and was_hidden and visible:
+                _fade_in_widget(row, duration=150)
 
     def _on_cloud_selection_changed(self, _index: int) -> None:
         choice = str(self._cloud_combo.currentData() or "auto")
@@ -2248,7 +2582,10 @@ class FlowHubWindow(QMainWindow):
     def _on_update_available(self, info: UpdateInfo, prompt_user: bool) -> None:
         self._pending_update = info
         self._update_banner_lbl.setText(f"WhisperLM v{info.version} is available — Would you like to update?")
+        was_hidden = self._update_banner.isHidden()
         self._update_banner.show()
+        if was_hidden and getattr(self, "_page_ready", False) and self.isVisible():
+            _fade_in_widget(self._update_banner, duration=180)
         self._update_btn.setText(f"Update to v{info.version}")
         self._update_btn.setObjectName("PrimaryPillBtn")
         self._update_btn.style().unpolish(self._update_btn)
@@ -2295,13 +2632,18 @@ class FlowHubWindow(QMainWindow):
 
     def _set_runtime_status(self, message: str, percent: int) -> None:
         self._sidebar_status_lbl.setText(message or "Ready")
+        if getattr(self, "_brand_mark", None) is not None:
+            self._brand_mark.set_pulsing(percent >= 0 or getattr(self, "_is_meeting_recording", False))
         if percent < 0:
             self._setup_banner.hide()
             return
         self._setup_status_lbl.setText(message)
         self._setup_progress.setValue(max(0, min(100, percent)))
         self._setup_pct_lbl.setText(f"{percent}%" if percent > 0 else "")
+        was_hidden = self._setup_banner.isHidden()
         self._setup_banner.show()
+        if was_hidden and getattr(self, "_page_ready", False) and self.isVisible():
+            _fade_in_widget(self._setup_banner, duration=180)
 
     # --- Custom Dictionary ---
 
@@ -2335,6 +2677,9 @@ class FlowHubWindow(QMainWindow):
             rl.addWidget(lbl, 1)
             rl.addWidget(rm_btn)
             self._dict_list_layout.addWidget(row)
+
+        if getattr(self, "_page_ready", False) and self.isVisible():
+            _fade_in_widget(self._dict_card, duration=150)
 
     def _add_dictionary_word(self) -> None:
         term = self._dict_input.text().strip()
@@ -2384,9 +2729,16 @@ class FlowHubWindow(QMainWindow):
     def _rebuild_history_feed(self) -> None:
         total_words = sum(len(item.cleaned_text.split()) for item in self._history)
         active_days = len({item.date for item in self._history if item.date})
-        self._tile_words.value_lbl.setText(str(total_words))
-        self._tile_sessions.value_lbl.setText(str(len(self._history)))
-        self._tile_days.value_lbl.setText(str(active_days))
+        animate = getattr(self, "_page_ready", False) and self.isVisible()
+        for tile, val in (
+            (self._tile_words, str(total_words)),
+            (self._tile_sessions, str(len(self._history))),
+            (self._tile_days, str(active_days)),
+        ):
+            changed = tile.value_lbl.text() != val
+            tile.value_lbl.setText(val)
+            if animate and changed:
+                tile.pulse()
 
         while self._history_layout.count() > 2:
             item = self._history_layout.takeAt(0)
@@ -2434,13 +2786,15 @@ class FlowHubWindow(QMainWindow):
                 grouped[-1][1].append(entry)
 
         insert_pos = 0
-        for bucket, bucket_entries in grouped:
+        for bucket_idx, (bucket, bucket_entries) in enumerate(grouped):
             lbl = QLabel(bucket)
             lbl.setObjectName("SectionTitle")
             self._history_layout.insertWidget(insert_pos, lbl)
             insert_pos += 1
             group_card = _DictationDayGroup(bucket_entries, on_copy=self._on_copy_text)
             self._history_layout.insertWidget(insert_pos, group_card)
+            if animate and bucket_idx == 0:
+                _fade_in_widget(group_card, duration=165)
             insert_pos += 1
 
         if len(matched) > len(shown):
@@ -2486,6 +2840,9 @@ class FlowHubWindow(QMainWindow):
 
     def _set_meeting_status(self, state: str, label: str) -> None:
         self._is_meeting_recording = state == "recording"
+        if getattr(self, "_brand_mark", None) is not None:
+            self._brand_mark.set_pulsing(state in {"recording", "cleaning", "summarizing"})
+        animate = getattr(self, "_page_ready", False) and self.isVisible()
         if state == "recording":
             if not hasattr(self, "_hub_meeting_timer"):
                 self._hub_meeting_timer = QTimer(self)
@@ -2501,7 +2858,10 @@ class FlowHubWindow(QMainWindow):
             self._meeting_action_btn.setObjectName("DangerPillBtn")
             self._banner_dot.setStyleSheet(f"color: {_ACCENT_RED}; font-size: 12px;")
             self._tick_meeting_banner()
+            was_hidden = self._meeting_banner.isHidden()
             self._meeting_banner.show()
+            if animate and was_hidden:
+                _fade_in_widget(self._meeting_banner, duration=175)
             self._nav_buttons[1].setText("  Meetings  ●")
             self._sidebar_status_lbl.setText(f"Recording: {label[:16]}")
         elif state in {"cleaning", "summarizing"}:
@@ -2512,7 +2872,10 @@ class FlowHubWindow(QMainWindow):
             self._banner_dot.setStyleSheet(f"color: {_TEXT_SECONDARY}; font-size: 12px;")
             is_sum = state == "summarizing"
             self._banner_text.setText("Summarizing meeting..." if is_sum else "Polishing meeting transcript...")
+            was_hidden = self._meeting_banner.isHidden()
             self._meeting_banner.show()
+            if animate and was_hidden:
+                _fade_in_widget(self._meeting_banner, duration=175)
             self._nav_buttons[1].setText("  Meetings")
             self._sidebar_status_lbl.setText("Summarizing" if is_sum else "Polishing transcript")
         else:
