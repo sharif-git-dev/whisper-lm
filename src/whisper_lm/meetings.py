@@ -12,6 +12,7 @@ import re
 import threading
 import time
 from typing import Any, Callable
+import wave
 import winreg
 
 import numpy as np
@@ -743,6 +744,7 @@ class MeetingRecord:
     raw_transcript: str = ""
     cleaned_transcript: str = ""
     summary: str = ""
+    audio_file: str = ""
     status: str = "recording"  # "recording" | "cleaning" | "summarizing" | "completed"
     auto_detected: bool = False
 
@@ -793,9 +795,34 @@ class MeetingStore:
                 continue
         return records
 
+    def audio_path(self, record_or_id: MeetingRecord | str) -> Path:
+        if isinstance(record_or_id, MeetingRecord):
+            name = Path(record_or_id.audio_file).name if record_or_id.audio_file else f"{record_or_id.id}.wav"
+        else:
+            raw_id = str(record_or_id).strip()
+            name = Path(raw_id).name if raw_id.lower().endswith(".wav") else f"{Path(raw_id).name}.wav"
+        return self.directory / name
+
+    def has_audio(self, record_or_id: MeetingRecord | str) -> bool:
+        path = self.audio_path(record_or_id)
+        try:
+            return path.exists() and path.is_file() and path.stat().st_size > 44
+        except OSError:
+            return False
+
     def delete(self, meeting_id: str) -> None:
-        for ext in (".json", ".md"):
-            target = self.directory / f"{meeting_id}{ext}"
+        safe_id = Path(meeting_id).name
+        candidates = {self.directory / f"{safe_id}{ext}" for ext in (".json", ".md", ".wav")}
+        json_path = self.directory / f"{safe_id}.json"
+        if json_path.exists():
+            try:
+                raw = json.loads(json_path.read_text(encoding="utf-8"))
+                audio_name = str(raw.get("audio_file") or "").strip()
+                if audio_name:
+                    candidates.add(self.directory / Path(audio_name).name)
+            except Exception:
+                pass
+        for target in candidates:
             if target.exists():
                 target.unlink(missing_ok=True)
 
@@ -812,6 +839,44 @@ def _make_meeting_id(title: str) -> str:
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     slug = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")[:28] or "meeting"
     return f"{stamp}_{slug}"
+
+
+class _MeetingAudioWriter:
+    """Streams float32 meeting audio incrementally to a 16-bit mono WAV file on disk."""
+
+    def __init__(self, path: Path, sample_rate: int = 16000) -> None:
+        self.path = path
+        self.sample_rate = max(8000, int(sample_rate))
+        self._wf: wave.Wave_write | None = None
+        self._frames = 0
+
+    def write(self, samples: np.ndarray) -> None:
+        arr = np.asarray(samples, dtype=np.float32).reshape(-1)
+        if arr.size == 0:
+            return
+        if self._wf is None:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            wf = wave.open(str(self.path), "wb")
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(self.sample_rate)
+            self._wf = wf
+        pcm16 = (np.clip(arr, -1.0, 1.0) * 32767.0).astype(np.int16)
+        self._wf.writeframes(pcm16.tobytes())
+        self._frames += int(pcm16.size)
+
+    def close(self) -> bool:
+        wf = self._wf
+        self._wf = None
+        if wf is not None:
+            try:
+                wf.close()
+            except Exception:
+                pass
+        if self._frames <= 0 and self.path.exists():
+            self.path.unlink(missing_ok=True)
+            return False
+        return self._frames > 0 and self.path.exists()
 
 
 class MeetingRecorderController:
@@ -1054,6 +1119,12 @@ class MeetingRecorderController:
             return
 
         tracker = SpeakerTracker()
+        audio_path = self.store.audio_path(record.id)
+        audio_writer = (
+            _MeetingAudioWriter(audio_path, sample_rate=sr)
+            if getattr(self.config, "meeting_save_audio", True)
+            else None
+        )
         pending_mixed: list[np.ndarray] = []
         pending_mic: list[np.ndarray] = []
         pending_loop: list[np.ndarray] = []
@@ -1062,71 +1133,80 @@ class MeetingRecorderController:
         preroll_mic = np.zeros(0, dtype=np.float32)
         preroll_loop = np.zeros(0, dtype=np.float32)
 
-        while not self._stop_event.wait(0.45):
-            drained = self._read_capture_channels(capture, stop=False)
-            if drained.mixed.size > 0:
-                if pending_count == 0 and float(np.max(np.abs(drained.mixed))) < 0.006:
-                    preroll_mixed = drained.mixed[-preroll_samples:]
-                    preroll_mic = drained.mic[-preroll_samples:]
-                    preroll_loop = drained.loopback[-preroll_samples:]
+        try:
+            while not self._stop_event.wait(0.45):
+                drained = self._read_capture_channels(capture, stop=False)
+                if drained.mixed.size > 0:
+                    if audio_writer is not None:
+                        audio_writer.write(drained.mixed)
+                    if pending_count == 0 and float(np.max(np.abs(drained.mixed))) < 0.006:
+                        preroll_mixed = drained.mixed[-preroll_samples:]
+                        preroll_mic = drained.mic[-preroll_samples:]
+                        preroll_loop = drained.loopback[-preroll_samples:]
+                        continue
+                    if pending_count == 0 and preroll_mixed.size > 0:
+                        pending_mixed.append(preroll_mixed)
+                        pending_mic.append(preroll_mic)
+                        pending_loop.append(preroll_loop)
+                        pending_count += preroll_mixed.size
+                        preroll_mixed = np.zeros(0, dtype=np.float32)
+                        preroll_mic = np.zeros(0, dtype=np.float32)
+                        preroll_loop = np.zeros(0, dtype=np.float32)
+                    pending_mixed.append(drained.mixed)
+                    pending_mic.append(drained.mic)
+                    pending_loop.append(drained.loopback)
+                    pending_count += drained.mixed.size
+
+                if pending_count < min_live_samples:
                     continue
-                if pending_count == 0 and preroll_mixed.size > 0:
-                    pending_mixed.append(preroll_mixed)
-                    pending_mic.append(preroll_mic)
-                    pending_loop.append(preroll_loop)
-                    pending_count += preroll_mixed.size
-                    preroll_mixed = np.zeros(0, dtype=np.float32)
-                    preroll_mic = np.zeros(0, dtype=np.float32)
-                    preroll_loop = np.zeros(0, dtype=np.float32)
-                pending_mixed.append(drained.mixed)
-                pending_mic.append(drained.mic)
-                pending_loop.append(drained.loopback)
-                pending_count += drained.mixed.size
 
-            if pending_count < min_live_samples:
-                continue
+                combined_mixed = np.concatenate(pending_mixed) if len(pending_mixed) > 1 else pending_mixed[0]
+                tail = combined_mixed[-min(tail_samples, combined_mixed.size) :]
+                tail_rms = float(np.sqrt(np.mean(tail * tail)))
 
-            combined_mixed = np.concatenate(pending_mixed) if len(pending_mixed) > 1 else pending_mixed[0]
-            tail = combined_mixed[-min(tail_samples, combined_mixed.size) :]
-            tail_rms = float(np.sqrt(np.mean(tail * tail)))
+                if tail_rms < 0.011 or combined_mixed.size >= max_live_samples:
+                    combined_mic = np.concatenate(pending_mic) if len(pending_mic) > 1 else pending_mic[0]
+                    combined_loop = np.concatenate(pending_loop) if len(pending_loop) > 1 else pending_loop[0]
+                    if tail_rms < 0.011:
+                        flush_mixed, flush_mic, flush_loop = combined_mixed, combined_mic, combined_loop
+                        pending_mixed.clear()
+                        pending_mic.clear()
+                        pending_loop.clear()
+                        pending_count = 0
+                    else:
+                        split_idx = self._find_quiet_split_idx(combined_mixed, sr)
+                        flush_mixed = combined_mixed[:split_idx]
+                        flush_mic = combined_mic[:split_idx]
+                        flush_loop = combined_loop[:split_idx]
+                        rem_mixed = combined_mixed[split_idx:]
+                        rem_mic = combined_mic[split_idx:]
+                        rem_loop = combined_loop[split_idx:]
+                        pending_mixed = [rem_mixed] if rem_mixed.size > 0 else []
+                        pending_mic = [rem_mic] if rem_mic.size > 0 else []
+                        pending_loop = [rem_loop] if rem_loop.size > 0 else []
+                        pending_count = rem_mixed.size
 
-            if tail_rms < 0.011 or combined_mixed.size >= max_live_samples:
-                combined_mic = np.concatenate(pending_mic) if len(pending_mic) > 1 else pending_mic[0]
-                combined_loop = np.concatenate(pending_loop) if len(pending_loop) > 1 else pending_loop[0]
-                if tail_rms < 0.011:
-                    flush_mixed, flush_mic, flush_loop = combined_mixed, combined_mic, combined_loop
-                    pending_mixed.clear()
-                    pending_mic.clear()
-                    pending_loop.clear()
-                    pending_count = 0
-                else:
-                    split_idx = self._find_quiet_split_idx(combined_mixed, sr)
-                    flush_mixed = combined_mixed[:split_idx]
-                    flush_mic = combined_mic[:split_idx]
-                    flush_loop = combined_loop[:split_idx]
-                    rem_mixed = combined_mixed[split_idx:]
-                    rem_mic = combined_mic[split_idx:]
-                    rem_loop = combined_loop[split_idx:]
-                    pending_mixed = [rem_mixed] if rem_mixed.size > 0 else []
-                    pending_mic = [rem_mic] if rem_mic.size > 0 else []
-                    pending_loop = [rem_loop] if rem_loop.size > 0 else []
-                    pending_count = rem_mixed.size
+                    chunk_start_secs = max(0, int((time.monotonic() - self._started_monotonic) - (combined_mixed.size / sr)))
+                    self._flush_channels(record, flush_mic, flush_loop, flush_mixed, tracker, chunk_start_secs)
 
-                chunk_start_secs = max(0, int((time.monotonic() - self._started_monotonic) - (combined_mixed.size / sr)))
-                self._flush_channels(record, flush_mic, flush_loop, flush_mixed, tracker, chunk_start_secs)
-
-        # Flush any buffered speech + trailing capture audio cleanly on stop
-        trailing = self._read_capture_channels(capture, stop=True)
-        if trailing.mixed.size > 0:
-            pending_mixed.append(trailing.mixed)
-            pending_mic.append(trailing.mic)
-            pending_loop.append(trailing.loopback)
-        if pending_mixed:
-            final_mixed = np.concatenate(pending_mixed) if len(pending_mixed) > 1 else pending_mixed[0]
-            final_mic = np.concatenate(pending_mic) if len(pending_mic) > 1 else pending_mic[0]
-            final_loop = np.concatenate(pending_loop) if len(pending_loop) > 1 else pending_loop[0]
-            chunk_start_secs = max(0, int((time.monotonic() - self._started_monotonic) - (final_mixed.size / sr)))
-            self._flush_channels(record, final_mic, final_loop, final_mixed, tracker, chunk_start_secs)
+            # Flush any buffered speech + trailing capture audio cleanly on stop
+            trailing = self._read_capture_channels(capture, stop=True)
+            if trailing.mixed.size > 0:
+                if audio_writer is not None:
+                    audio_writer.write(trailing.mixed)
+                pending_mixed.append(trailing.mixed)
+                pending_mic.append(trailing.mic)
+                pending_loop.append(trailing.loopback)
+            if pending_mixed:
+                final_mixed = np.concatenate(pending_mixed) if len(pending_mixed) > 1 else pending_mixed[0]
+                final_mic = np.concatenate(pending_mic) if len(pending_mic) > 1 else pending_mic[0]
+                final_loop = np.concatenate(pending_loop) if len(pending_loop) > 1 else pending_loop[0]
+                chunk_start_secs = max(0, int((time.monotonic() - self._started_monotonic) - (final_mixed.size / sr)))
+                self._flush_channels(record, final_mic, final_loop, final_mixed, tracker, chunk_start_secs)
+        finally:
+            if audio_writer is not None and audio_writer.close():
+                with self._lock:
+                    record.audio_file = audio_path.name
 
         with self._lock:
             record.ended_at = datetime.now().strftime("%Y-%m-%d %H:%M")

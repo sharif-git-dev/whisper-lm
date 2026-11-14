@@ -189,8 +189,15 @@ def merge_snapshots(local_snap: Mapping[str, Any], remote_snap: Mapping[str, Any
             item = dict(payload)
             item.setdefault("id", mid)
             existing = merged_meetings.get(mid)
-            if existing is None or _meeting_score(item) >= _meeting_score(existing):
+            if existing is None:
                 merged_meetings[mid] = item
+            else:
+                kept_audio = str(item.get("audio_file") or existing.get("audio_file") or "").strip()
+                winner = item if _meeting_score(item) >= _meeting_score(existing) else existing
+                if kept_audio and not str(winner.get("audio_file") or "").strip():
+                    winner = dict(winner)
+                    winner["audio_file"] = kept_audio
+                merged_meetings[mid] = winner
 
     seen_terms: set[str] = set()
     merged_terms: list[str] = []

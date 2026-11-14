@@ -559,3 +559,105 @@ def test_home_hides_clear_button_and_settings_collapses_clear_history() -> None:
     assert hub._data_toggle_btn.text().endswith("▸")
     app.processEvents()
     hub.close()
+
+
+def test_meeting_audio_bar_visibility_playback_and_setting(tmp_path, monkeypatch) -> None:
+    import wave
+    import numpy as np
+
+    app = QApplication.instance() or QApplication([])
+    meetings_dir = tmp_path / "meetings"
+    meetings_dir.mkdir(parents=True)
+
+    rec_with_audio = MeetingRecord(
+        id="20261114_200000_audio",
+        title="Design Review",
+        app_name="Google Meet",
+        started_at="2026-11-14 20:00",
+        duration_seconds=2,
+        raw_transcript="[00:00] You: Let's review the spec.",
+        cleaned_transcript="[00:00] You: Let's review the spec.",
+        audio_file="20261114_200000_audio.wav",
+        status="completed",
+    )
+    wav_path = meetings_dir / rec_with_audio.audio_file
+    with wave.open(str(wav_path), "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(16000)
+        wf.writeframes(np.zeros(20000, dtype=np.int16).tobytes())
+
+    rec_without_audio = MeetingRecord(
+        id="20261114_190000_textonly",
+        title="Older Call",
+        app_name="Zoom",
+        started_at="2026-11-14 19:00",
+        duration_seconds=30,
+        cleaned_transcript="Transcript only.",
+        status="completed",
+    )
+
+    class FakeOutputStream:
+        def __init__(self, **_kwargs) -> None:
+            self.started = False
+            self.stopped = False
+
+        def start(self) -> None:
+            self.started = True
+
+        def stop(self) -> None:
+            self.stopped = True
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr("whisper_lm.ui.sd.OutputStream", FakeOutputStream)
+
+    saved_cfgs: list[AppConfig] = []
+    deleted_ids: list[str] = []
+    hub = FlowHubWindow(
+        config=AppConfig(),
+        on_save_config=saved_cfgs.append,
+        on_copy_text=lambda _t: None,
+        on_delete_meeting=deleted_ids.append,
+        meetings_dir=meetings_dir,
+    )
+
+    # Default setting enables meeting reference audio and persists toggles cleanly
+    assert hub._meeting_save_audio_switch.isChecked() is True
+    hub._meeting_save_audio_switch.setChecked(False)
+    hub._save_settings()
+    assert saved_cfgs[-1].meeting_save_audio is False
+
+    # Selecting meeting with saved WAV shows compact player bar and controls playback/seek cleanly
+    hub._set_meetings([rec_with_audio, rec_without_audio])
+    assert not hub._audio_bar.isHidden()
+    assert hub._audio_bar._slider.maximum() == 20000
+    assert hub._audio_bar._time_lbl.text() == "00:00 / 00:01"
+
+    hub._audio_bar.toggle_play()
+    assert hub._audio_bar._playing is True
+    assert hub._audio_bar._play_btn.text() == "Pause"
+
+    hub._audio_bar.seek(16000)
+    assert hub._audio_bar._pos_frames == 16000
+    assert hub._audio_bar._time_lbl.text() == "00:01 / 00:01"
+
+    hub._audio_bar.toggle_play()
+    assert hub._audio_bar._playing is False
+    assert hub._audio_bar._play_btn.text() == "Play"
+
+    # Switching to text-only meeting hides player bar and releases file handles
+    hub._meeting_list.setCurrentRow(1)
+    assert hub._audio_bar.isHidden()
+
+    # Switching back and deleting releases file handles cleanly before deleting
+    hub._meeting_list.setCurrentRow(0)
+    assert not hub._audio_bar.isHidden()
+    hub._delete_selected_meeting()
+    assert deleted_ids == [rec_with_audio.id]
+    assert hub._audio_bar.isHidden()
+    wav_path.unlink()
+
+    app.processEvents()
+    hub.close()

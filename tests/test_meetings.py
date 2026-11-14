@@ -160,6 +160,9 @@ def test_meeting_store_roundtrip_and_delete(tmp_path: Path) -> None:
         auto_detected=True,
     )
     store.save(rec)
+    wav_file = store.audio_path(rec.id)
+    wav_file.write_bytes(b"RIFF" + b"\x00" * 60)
+    assert store.has_audio(rec)
     loaded = store.list_all()
     assert len(loaded) == 1
     assert loaded[0].display_transcript == "Hello team, let's start."
@@ -167,6 +170,7 @@ def test_meeting_store_roundtrip_and_delete(tmp_path: Path) -> None:
 
     store.delete(rec.id)
     assert store.list_all() == []
+    assert not wav_file.exists()
 
 
 def test_meeting_recorder_controller_chunk_and_cleanup(tmp_path: Path, monkeypatch) -> None:
@@ -369,6 +373,17 @@ def test_dual_channel_diarization_cleanup_and_summary(tmp_path: Path, monkeypatc
     assert "] You: Let us review the release plan." in saved.cleaned_transcript
     assert "## Overview" in saved.summary
     assert "summarizing" in updates
+    assert saved.audio_file == f"{saved.id}.wav"
+
+    import wave
+
+    wav_path = Path(cfg.meetings_dir) / saved.audio_file
+    assert wav_path.exists()
+    with wave.open(str(wav_path), "rb") as wf:
+        assert wf.getnchannels() == 1
+        assert wf.getsampwidth() == 2
+        assert wf.getframerate() == sr
+        assert wf.getnframes() > sr * 2
 
     md_content = (Path(cfg.meetings_dir) / f"{saved.id}.md").read_text(encoding="utf-8")
     assert "## Summary" in md_content
@@ -386,3 +401,46 @@ def test_dual_channel_diarization_cleanup_and_summary(tmp_path: Path, monkeypatc
     assert resummarized is not None
     assert resummarized.summary == "## Overview\nUpdated summary."
     assert store.list_all()[0].summary == "## Overview\nUpdated summary."
+
+
+def test_meeting_recorder_skips_audio_when_save_audio_disabled(tmp_path: Path, monkeypatch) -> None:
+    class FakeCapture:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        def start(self) -> None:
+            pass
+
+        def drain_samples(self) -> np.ndarray:
+            return np.full(8000, 0.2, dtype=np.float32)
+
+        def stop(self) -> np.ndarray:
+            return np.zeros(0, dtype=np.float32)
+
+    monkeypatch.setattr("whisper_lm.meetings.DualStreamAudioCapture", FakeCapture)
+
+    class FakeAsr:
+        def transcribe(self, _wav_bytes: bytes):
+            return SimpleNamespace(text="hello", detected_language="en")
+
+    class FakeCleanup:
+        def clean_meeting_transcript(self, raw_text: str, **_kwargs) -> str:
+            return raw_text
+
+    store = MeetingStore(tmp_path / "meetings")
+    cfg = AppConfig(vad_enabled=False, meeting_cleanup_enabled=False, meeting_save_audio=False)
+    ctrl = MeetingRecorderController(
+        config=cfg,
+        asr=FakeAsr(),  # type: ignore[arg-type]
+        cleanup=FakeCleanup(),  # type: ignore[arg-type]
+        vad=None,
+        store=store,
+        is_llm_available=lambda: False,
+        on_record_updated=lambda _rec: None,
+    )
+    ctrl.start(title="No Audio Test", app_name="Manual")
+    ctrl.shutdown()
+
+    saved = store.list_all()[0]
+    assert saved.audio_file == ""
+    assert not list((tmp_path / "meetings").glob("*.wav"))

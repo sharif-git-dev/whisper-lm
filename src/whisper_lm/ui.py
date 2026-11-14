@@ -6,9 +6,15 @@ import ctypes
 from dataclasses import replace
 from datetime import datetime
 import math
+from pathlib import Path
+import subprocess
+import sys
+import threading
 from typing import Any, Callable
+import wave
 
 import numpy as np
+import sounddevice as sd
 from PySide6.QtCore import (
     Property,
     QEasingCurve,
@@ -17,6 +23,7 @@ from PySide6.QtCore import (
     QRectF,
     Qt,
     QTimer,
+    QUrl,
     QVariantAnimation,
     Signal,
 )
@@ -26,6 +33,7 @@ from PySide6.QtGui import (
     QBrush,
     QColor,
     QCursor,
+    QDesktopServices,
     QFont,
     QIcon,
     QLinearGradient,
@@ -55,6 +63,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
+    QSlider,
     QStackedWidget,
     QSystemTrayIcon,
     QVBoxLayout,
@@ -1406,6 +1415,270 @@ class _DictationDayGroup(QFrame):
             layout.addWidget(_DictationRow(entry, on_copy=on_copy))
 
 
+class _MeetingAudioBar(QFrame):
+    """Compact obsidian audio playback bar for saved meeting reference WAV files."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("AudioBar")
+        self._lock = threading.Lock()
+        self._path: Path | None = None
+        self._wf: wave.Wave_read | None = None
+        self._stream: sd.OutputStream | None = None
+        self._framerate = 16000
+        self._channels = 1
+        self._sampwidth = 2
+        self._total_frames = 0
+        self._pos_frames = 0
+        self._playing = False
+        self._scrubbing = False
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(12, 8, 12, 8)
+        layout.setSpacing(10)
+
+        self._play_btn = QPushButton("Play")
+        self._play_btn.setObjectName("PrimaryPillBtn")
+        self._play_btn.setFixedWidth(74)
+        self._play_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._play_btn.clicked.connect(self.toggle_play)
+
+        self._time_lbl = QLabel("00:00 / 00:00")
+        self._time_lbl.setObjectName("MutedMeta")
+        self._time_lbl.setMinimumWidth(88)
+
+        self._slider = QSlider(Qt.Orientation.Horizontal)
+        self._slider.setObjectName("AudioSlider")
+        self._slider.setRange(0, 0)
+        self._slider.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._slider.sliderPressed.connect(self._on_scrub_start)
+        self._slider.sliderMoved.connect(self._on_scrub_move)
+        self._slider.sliderReleased.connect(self._on_scrub_end)
+
+        self._open_btn = QPushButton("Open Audio")
+        self._open_btn.setObjectName("GhostPillBtn")
+        self._open_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._open_btn.setToolTip("Open the recorded meeting WAV file in Explorer")
+        self._open_btn.clicked.connect(self._open_in_folder)
+
+        layout.addWidget(self._play_btn)
+        layout.addWidget(self._slider, 1)
+        layout.addWidget(self._time_lbl)
+        layout.addWidget(self._open_btn)
+
+        self._timer = QTimer(self)
+        self._timer.setInterval(80)
+        self._timer.timeout.connect(self._sync_progress)
+        self.hide()
+
+    def load_file(self, path: Path | None, *, animate: bool = False) -> None:
+        resolved: Path | None = None
+        if path is not None:
+            try:
+                resolved = path.resolve()
+            except OSError:
+                resolved = path
+        if resolved is None or not resolved.exists() or not resolved.is_file():
+            self.unload()
+            return
+        if self._path == resolved and self._total_frames > 0:
+            if self.isHidden():
+                self.show()
+                if animate:
+                    _fade_in_widget(self, duration=150)
+            return
+
+        self.unload()
+        try:
+            with wave.open(str(resolved), "rb") as wf:
+                channels = int(wf.getnchannels())
+                sampwidth = int(wf.getsampwidth())
+                framerate = int(wf.getframerate())
+                nframes = int(wf.getnframes())
+        except Exception:
+            self.hide()
+            return
+
+        if nframes <= 0 or framerate <= 0 or sampwidth != 2 or channels <= 0:
+            self.hide()
+            return
+
+        self._path = resolved
+        self._channels = channels
+        self._sampwidth = sampwidth
+        self._framerate = framerate
+        self._total_frames = nframes
+        self._pos_frames = 0
+
+        self._slider.blockSignals(True)
+        self._slider.setRange(0, nframes)
+        self._slider.setValue(0)
+        self._slider.blockSignals(False)
+        self._play_btn.setEnabled(True)
+        self._play_btn.setText("Play")
+        self._play_btn.setToolTip("")
+        self._update_time_label(0)
+
+        was_hidden = self.isHidden()
+        self.show()
+        if animate and was_hidden:
+            _fade_in_widget(self, duration=150)
+
+    def unload(self) -> None:
+        self._close_audio_output()
+        self._path = None
+        self._total_frames = 0
+        self._pos_frames = 0
+        self._slider.blockSignals(True)
+        self._slider.setRange(0, 0)
+        self._slider.setValue(0)
+        self._slider.blockSignals(False)
+        self._play_btn.setText("Play")
+        self._time_lbl.setText("00:00 / 00:00")
+        self.hide()
+
+    def pause(self) -> None:
+        self._close_audio_output()
+        self._play_btn.setText("Play")
+
+    def toggle_play(self) -> None:
+        if self._playing:
+            self.pause()
+        else:
+            self.play()
+
+    def play(self) -> None:
+        if self._path is None or not self._path.exists() or self._total_frames <= 0:
+            return
+        self._close_audio_output()
+        with self._lock:
+            if self._pos_frames >= self._total_frames:
+                self._pos_frames = 0
+            start_pos = self._pos_frames
+        try:
+            wf = wave.open(str(self._path), "rb")
+            wf.setpos(max(0, min(start_pos, self._total_frames - 1)))
+            stream = sd.OutputStream(
+                samplerate=self._framerate,
+                channels=self._channels,
+                dtype="float32",
+                callback=self._audio_callback,
+            )
+            with self._lock:
+                self._wf = wf
+                self._stream = stream
+                self._playing = True
+            stream.start()
+        except Exception:
+            self._close_audio_output()
+            self._play_btn.setText("Play")
+            self._play_btn.setToolTip("Audio playback unavailable on the active output device")
+            return
+        self._play_btn.setText("Pause")
+        self._timer.start()
+
+    def _close_audio_output(self) -> None:
+        self._timer.stop()
+        with self._lock:
+            self._playing = False
+            stream = self._stream
+            wf = self._wf
+            self._stream = None
+            self._wf = None
+        if stream is not None:
+            try:
+                stream.stop()
+                stream.close()
+            except Exception:
+                pass
+        if wf is not None:
+            try:
+                wf.close()
+            except Exception:
+                pass
+
+    def _audio_callback(self, outdata: np.ndarray, frames: int, _time_info: Any, _status: Any) -> None:
+        with self._lock:
+            wf = self._wf
+            if not self._playing or wf is None:
+                outdata.fill(0.0)
+                return
+            try:
+                raw = wf.readframes(frames)
+            except Exception:
+                outdata.fill(0.0)
+                self._playing = False
+                return
+            pcm = np.frombuffer(raw, dtype=np.int16)
+            actual = pcm.size // max(1, self._channels)
+            if actual > 0:
+                usable = actual * self._channels
+                floats = (pcm[:usable].astype(np.float32) / 32768.0).reshape(actual, self._channels)
+                outdata[:actual, :] = floats
+            if actual < frames:
+                outdata[actual:, :] = 0.0
+                self._pos_frames = self._total_frames
+                self._playing = False
+            else:
+                self._pos_frames += actual
+
+    def _on_scrub_start(self) -> None:
+        self._scrubbing = True
+
+    def _on_scrub_move(self, value: int) -> None:
+        self._update_time_label(value)
+
+    def _on_scrub_end(self) -> None:
+        self._scrubbing = False
+        self.seek(self._slider.value())
+
+    def seek(self, frame_pos: int) -> None:
+        target = max(0, min(int(frame_pos), self._total_frames))
+        with self._lock:
+            self._pos_frames = target
+            if self._wf is not None:
+                try:
+                    self._wf.setpos(min(target, max(0, self._total_frames - 1)))
+                except Exception:
+                    pass
+        self._update_time_label(target)
+
+    def _sync_progress(self) -> None:
+        with self._lock:
+            playing = self._playing
+            pos = self._pos_frames
+        if not self._scrubbing:
+            self._slider.blockSignals(True)
+            self._slider.setValue(min(pos, self._total_frames))
+            self._slider.blockSignals(False)
+            self._update_time_label(pos)
+        if not playing:
+            self._close_audio_output()
+            if pos >= self._total_frames:
+                with self._lock:
+                    self._pos_frames = 0
+                self._slider.setValue(0)
+                self._update_time_label(0)
+            self._play_btn.setText("Play")
+
+    def _update_time_label(self, frame_pos: int) -> None:
+        cur_secs = int(max(0, frame_pos) // max(1, self._framerate))
+        tot_secs = int(max(0, self._total_frames) // max(1, self._framerate))
+        self._time_lbl.setText(f"{format_duration(cur_secs)} / {format_duration(tot_secs)}")
+
+    def _open_in_folder(self) -> None:
+        path = self._path
+        if path is None or not path.exists():
+            return
+        if sys.platform == "win32":
+            try:
+                subprocess.Popen(["explorer", "/select,", str(path)])
+                return
+            except Exception:
+                pass
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(path.parent)))
+
+
 class FlowHubWindow(QMainWindow):
     """WhisperLM desktop Hub window: Home, Meetings, Dictionary, Settings."""
 
@@ -1433,9 +1706,11 @@ class FlowHubWindow(QMainWindow):
         on_check_updates: Callable[[], None] | None = None,
         on_install_update: Callable[[Any], None] | None = None,
         on_skip_update: Callable[[str], None] | None = None,
+        meetings_dir: Path | None = None,
     ) -> None:
         super().__init__()
         self.config = config
+        self._meetings_dir = meetings_dir
         self._on_save_config = on_save_config
         self._on_copy_text = on_copy_text
         self._on_start_meeting = on_start_meeting or (lambda: None)
@@ -1484,6 +1759,14 @@ class FlowHubWindow(QMainWindow):
     def showEvent(self, event) -> None:
         super().showEvent(event)
         _apply_dark_titlebar(self)
+
+    def stop_audio_playback(self) -> None:
+        if getattr(self, "_audio_bar", None) is not None:
+            self._audio_bar.unload()
+
+    def closeEvent(self, event) -> None:
+        self.stop_audio_playback()
+        super().closeEvent(event)
 
     def _apply_stylesheet(self) -> None:
         self.setStyleSheet(
@@ -1736,6 +2019,33 @@ class FlowHubWindow(QMainWindow):
             QProgressBar::chunk {{
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 {_ACCENT_INDIGO_DEEP}, stop:1 {_ACCENT_INDIGO});
                 border-radius: 3px;
+            }}
+            QFrame#AudioBar {{
+                background-color: {_BG_INPUT};
+                border: 1px solid {_BORDER};
+                border-radius: 10px;
+            }}
+            QSlider#AudioSlider::groove:horizontal {{
+                background-color: #171722;
+                height: 4px;
+                border-radius: 2px;
+            }}
+            QSlider#AudioSlider::sub-page:horizontal {{
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 {_ACCENT_INDIGO_DEEP}, stop:1 {_ACCENT_INDIGO});
+                height: 4px;
+                border-radius: 2px;
+            }}
+            QSlider#AudioSlider::handle:horizontal {{
+                background-color: {_TEXT_PRIMARY};
+                border: 2px solid {_ACCENT_INDIGO};
+                width: 12px;
+                height: 12px;
+                margin: -5px 0px;
+                border-radius: 7px;
+            }}
+            QSlider#AudioSlider::handle:horizontal:hover {{
+                background-color: #FFFFFF;
+                border-color: #A2AEFF;
             }}
             """
         )
@@ -2101,6 +2411,9 @@ class FlowHubWindow(QMainWindow):
         dl.addLayout(detail_bar)
         dl.addWidget(self._divider())
 
+        self._audio_bar = _MeetingAudioBar()
+        dl.addWidget(self._audio_bar)
+
         self._detail_body = QPlainTextEdit()
         self._detail_body.setReadOnly(True)
         self._detail_body.setStyleSheet(
@@ -2332,12 +2645,15 @@ class FlowHubWindow(QMainWindow):
 
         self._meeting_auto_switch = _ToggleSwitch(self.config.meeting_auto_detect)
         self._meeting_sys_audio_switch = _ToggleSwitch(self.config.meeting_capture_system_audio)
+        self._meeting_save_audio_switch = _ToggleSwitch(self.config.meeting_save_audio)
         self._meeting_cleanup_switch = _ToggleSwitch(self.config.meeting_cleanup_enabled)
         self._meeting_summary_switch = _ToggleSwitch(self.config.meeting_summary_enabled)
 
         c4.addWidget(self._setting_row("Auto-Detect Meetings", "Automatically record Meet, Zoom, Teams, Discord, and WhatsApp calls", self._meeting_auto_switch))
         c4.addWidget(self._divider())
         c4.addWidget(self._setting_row("Record Meeting Audio", "Capture both what others say and your microphone", self._meeting_sys_audio_switch))
+        c4.addWidget(self._divider())
+        c4.addWidget(self._setting_row("Save Meeting Audio", "Record full meeting audio locally as a WAV reference file", self._meeting_save_audio_switch))
         c4.addWidget(self._divider())
         c4.addWidget(self._setting_row("Polish Transcripts", "Clean up wording and punctuation after a meeting ends", self._meeting_cleanup_switch))
         c4.addWidget(self._divider())
@@ -2512,6 +2828,7 @@ class FlowHubWindow(QMainWindow):
 
         self._meeting_auto_switch.setChecked(cfg.meeting_auto_detect)
         self._meeting_sys_audio_switch.setChecked(cfg.meeting_capture_system_audio)
+        self._meeting_save_audio_switch.setChecked(cfg.meeting_save_audio)
         self._meeting_cleanup_switch.setChecked(cfg.meeting_cleanup_enabled)
         self._meeting_summary_switch.setChecked(cfg.meeting_summary_enabled)
 
@@ -2943,6 +3260,7 @@ class FlowHubWindow(QMainWindow):
             self._render_selected_meeting(visible[target_row])
         else:
             self._selected_meeting_id = None
+            self._audio_bar.unload()
             self._btn_summarize_meeting.setText("Summarize")
             self._btn_summarize_meeting.setEnabled(False)
             self._detail_title.setText("No matching meetings" if self._meetings else "No meetings yet")
@@ -2985,6 +3303,19 @@ class FlowHubWindow(QMainWindow):
             btn.style().unpolish(btn)
             btn.style().polish(btn)
 
+    def _resolve_meeting_audio_path(self, rec: MeetingRecord) -> Path | None:
+        if rec.status == "recording":
+            return None
+        base = self._meetings_dir or self.config.resolve_data_path(self.config.meetings_dir)
+        filename = Path(rec.audio_file).name if rec.audio_file else f"{rec.id}.wav"
+        candidate = base / filename
+        try:
+            if candidate.exists() and candidate.is_file() and candidate.stat().st_size > 44:
+                return candidate
+        except OSError:
+            pass
+        return None
+
     def _render_selected_meeting(self, rec: MeetingRecord) -> None:
         self._detail_title.setText(rec.title)
         state_lbl = {
@@ -2994,6 +3325,9 @@ class FlowHubWindow(QMainWindow):
             "completed": format_duration(rec.duration_seconds),
         }.get(rec.status, "")
         self._detail_meta.setText(f"{rec.app_name or 'Manual'}  ·  {rec.started_at}  ·  {state_lbl}")
+
+        audio_path = self._resolve_meeting_audio_path(rec)
+        self._audio_bar.load_file(audio_path, animate=getattr(self, "_page_ready", False) and self.isVisible())
 
         if self._meeting_view_explicit is None:
             preferred = "summary" if (rec.status == "completed" and rec.summary.strip()) else "cleaned"
@@ -3051,6 +3385,7 @@ class FlowHubWindow(QMainWindow):
 
     def _delete_selected_meeting(self) -> None:
         if self._selected_meeting_id:
+            self._audio_bar.unload()
             self._on_delete_meeting(self._selected_meeting_id)
 
     # --- Settings Actions ---
@@ -3111,6 +3446,7 @@ class FlowHubWindow(QMainWindow):
             activation_sound_enabled=self._sound_switch.isChecked(),
             meeting_auto_detect=self._meeting_auto_switch.isChecked(),
             meeting_capture_system_audio=self._meeting_sys_audio_switch.isChecked(),
+            meeting_save_audio=self._meeting_save_audio_switch.isChecked(),
             meeting_cleanup_enabled=self._meeting_cleanup_switch.isChecked(),
             meeting_summary_enabled=self._meeting_summary_switch.isChecked(),
             cloud_backup_mode=cloud_mode,

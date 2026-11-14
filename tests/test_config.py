@@ -59,6 +59,7 @@ def test_meeting_config_defaults_and_backward_compat(tmp_path: Path) -> None:
     assert loaded.always_on_pill is True
     assert loaded.meeting_auto_detect is True
     assert loaded.meeting_capture_system_audio is True
+    assert loaded.meeting_save_audio is True
     assert loaded.meeting_cleanup_enabled is True
     assert loaded.meeting_chunk_seconds == 20
 

@@ -119,6 +119,7 @@ class AppConfig:
     # Meetings (Auto-detect & full recording + transcription)
     meeting_auto_detect: bool = True
     meeting_capture_system_audio: bool = True
+    meeting_save_audio: bool = True
     meeting_cleanup_enabled: bool = True
     meeting_summary_enabled: bool = True
     meeting_chunk_seconds: int = 20

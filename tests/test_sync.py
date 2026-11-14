@@ -227,3 +227,13 @@ def test_dictionary_term_deletion_stays_deleted_across_sync(tmp_path: Path) -> N
     saved_backup = json.loads((shared_cloud / "WhisperLM" / "whisperlm_backup.json").read_text(encoding="utf-8"))
     assert saved_backup["custom_dictionary"] == ["KeepTerm"]
     assert "RemoveMe" in saved_backup["deleted_dictionary_terms"]
+
+    # Merging snapshots preserves local audio_file reference when remote has newer summary
+    from whisper_lm.sync import merge_snapshots
+
+    merged = merge_snapshots(
+        local_snap={"meetings": {"m1": {"id": "m1", "raw_transcript": "hi", "audio_file": "m1.wav"}}},
+        remote_snap={"meetings": {"m1": {"id": "m1", "raw_transcript": "hi", "summary": "Done"}}},
+    )
+    assert merged["meetings"]["m1"]["summary"] == "Done"
+    assert merged["meetings"]["m1"]["audio_file"] == "m1.wav"

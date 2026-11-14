@@ -104,6 +104,7 @@ class WhisperLMApp:
             on_check_updates=lambda: self._check_updates_async(interactive=True),
             on_install_update=self._install_update_async,
             on_skip_update=self._skip_update_version,
+            meetings_dir=self.config.resolve_data_path(self.config.meetings_dir, base_dir=self.data_root),
         )
         self.meeting_pill = MeetingPillWidget(
             on_stop_clicked=self._manual_stop_meeting,
@@ -660,6 +661,7 @@ class WhisperLMApp:
         self.asr.close()
         self.cleanup.close()
         self.servers.stop()
+        self.window.stop_audio_playback()
         self.hud.hide()
         self.meeting_pill.hide()
         self.tray.hide()
